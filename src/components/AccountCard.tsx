@@ -88,17 +88,22 @@ function formatResetCreditsCount(resetCredits: AccountResetCredits | null): stri
   return count === 1 ? "1 reset" : `${count} resets`;
 }
 
-function formatResetCreditsExpiry(resetCredits: AccountResetCredits | null): string | null {
+function formatResetCreditsExpiry(
+  resetCredits: AccountResetCredits | null,
+  compact = false,
+): string | null {
   if (!resetCredits?.next_expires_at) return null;
 
   const expiry = new Date(resetCredits.next_expires_at);
   if (Number.isNaN(expiry.getTime())) return null;
 
-  return `closest expires ${new Intl.DateTimeFormat(undefined, {
+  const formattedDate = new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
-    year: "numeric",
-  }).format(expiry)}`;
+    ...(compact ? {} : { year: "numeric" }),
+  }).format(expiry);
+
+  return compact ? `closest ${formattedDate}` : `closest expires ${formattedDate}`;
 }
 
 function getResetCreditsTone(resetCredits: AccountResetCredits | null): {
@@ -237,7 +242,8 @@ export function AccountCard({
   const showSubscriptionStatus = account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
   const resetCreditsCount = formatResetCreditsCount(resetCredits);
-  const resetCreditsExpiry = formatResetCreditsExpiry(resetCredits);
+  const compactResetCredits = !account.is_active;
+  const resetCreditsExpiry = formatResetCreditsExpiry(resetCredits, compactResetCredits);
   const resetCreditsTone = getResetCreditsTone(resetCredits);
 
   const loadResetCredits = useCallback(async () => {
@@ -357,11 +363,26 @@ export function AccountCard({
           >
             {planDisplay}
           </span>
-          {resetCreditsCount && (
+          {resetCreditsCount && compactResetCredits && (
+            <div
+              className={`flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] leading-none ${resetCreditsTone.container} ${resetCreditsTone.text}`}
+              title={[resetCreditsCount, resetCreditsExpiry].filter(Boolean).join(" · ")}
+            >
+              <span className="shrink-0 whitespace-nowrap font-semibold">
+                {resetCreditsCount}
+              </span>
+              {resetCreditsExpiry && (
+                <span className="truncate">
+                  · {resetCreditsExpiry}
+                </span>
+              )}
+            </div>
+          )}
+          {resetCreditsCount && !compactResetCredits && (
             <div
               className={`flex max-w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-xs ${resetCreditsTone.container}`}
             >
-              <span className={`rounded-full border px-2.5 py-0.5 font-medium ${resetCreditsTone.badge}`}>
+              <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 font-medium ${resetCreditsTone.badge}`}>
                 {resetCreditsCount}
               </span>
               {resetCreditsExpiry && (
