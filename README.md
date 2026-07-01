@@ -18,6 +18,7 @@
 - **Automatic Warm-Up** – Warm up one account or all accounts manually, after each 5-hour reset window, or at specific scheduled times of day
 - **System Tray Controls** – Use the tray popup to switch accounts, inspect quota and active-account stats, refresh usage, open the main window, or quit the app
 - **Tray Display Modes** – Choose between the app icon with session percentage, a text-only hourly/weekly percentage display, or a hidden tray icon
+- **macOS Dock Control** – Keep Codex Switcher in the Dock or run it as a menu bar only app, with a first-close prompt and a tray fallback
 - **Rate-Limit Monitoring** – View real-time 5-hour session and weekly usage, reset timing, credits, and subscription expiry
 - **Blocked Switch Recovery** – Detect running Codex sessions and offer a force-close flow before retrying the account switch
 - **Dual Login Mode** – Authenticate with ChatGPT OAuth or import existing `auth.json` files
@@ -117,6 +118,17 @@ Codex Switcher shows two kinds of account usage information:
 
 The tray popup also includes compact active-account stats for today and
 the last 7 days, while keeping the normal rate-limit refresh flow separate.
+
+## macOS Dock and Menu Bar Mode
+
+On macOS, Codex Switcher can either stay visible in the Dock or live only in the
+menu bar. The first time you close the main window, the app asks which behavior
+you want and lets you choose whether to show that prompt again.
+
+You can change the same setting later from the tray popup or from the native
+tray menu under **Dock Icon**. If you choose **Menu Bar Only**, the app keeps a
+visible tray item so you can always reopen the main window or switch back to
+Dock mode.
 
 ## Warm-Up
 
