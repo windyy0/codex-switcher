@@ -16,8 +16,21 @@
   },
   "language": {
     "label": "Language",
-    "system": "system",
+    "system": "System",
     "changeFailed": "Could not change language: {{error}}"
+  },
+  "settings": {
+    "title": "Settings",
+    "backToAccounts": "Accounts",
+    "description": "Configure global behavior for Codex Switcher.",
+    "warmupSection": "Warm-up",
+    "autoWarmup": "Automatic warm-up",
+    "autoWarmupDescription": "Automatically warm eligible accounts based on their usage status.",
+    "timedWarmup": "Timed warm-up",
+    "timedWarmupDescription": "Warm eligible accounts at specific times each day.",
+    "warmupTime": "Warm-up time",
+    "languageSection": "Language",
+    "languageDescription": "Choose the language used throughout the application."
   },
   "window": {
     "minimize": "Minimize",

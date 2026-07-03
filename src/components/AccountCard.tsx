@@ -332,7 +332,7 @@ export function AccountCard({
                   setEditName(account.name);
                   setIsEditing(true);
                 }}
-                title={masked ? undefined : t("accountCard.rename")}
+                data-tooltip={masked ? undefined : t("accountCard.rename")}
               >
                 <BlurredText blur={masked}>{account.name}</BlurredText>
               </h3>
@@ -351,7 +351,7 @@ export function AccountCard({
             <button
               onClick={onToggleMask}
               className="p-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              title={masked ? t("accountCard.showInfo") : t("accountCard.hideInfo")}
+              data-tooltip={masked ? t("accountCard.showInfo") : t("accountCard.hideInfo")}
             >
               {masked ? (
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -374,7 +374,7 @@ export function AccountCard({
           {resetCreditsCount && compactResetCredits && (
             <div
               className={`flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] leading-none ${resetCreditsTone.container} ${resetCreditsTone.text}`}
-              title={[resetCreditsCount, resetCreditsExpiry].filter(Boolean).join(" · ")}
+              data-tooltip={[resetCreditsCount, resetCreditsExpiry].filter(Boolean).join(" · ")}
             >
               <span className="shrink-0 whitespace-nowrap font-semibold">
                 {resetCreditsCount}
@@ -445,7 +445,7 @@ export function AccountCard({
                 ? "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed"
                 : "bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900"
             }`}
-            title={switchDisabled ? t("accountCard.closeProcesses") : undefined}
+            data-tooltip={switchDisabled ? t("accountCard.closeProcesses") : undefined}
           >
             {switching ? t("accountCard.switching") : switchDisabled ? t("accountCard.codexRunning") : t("accountCard.switch")}
           </button>
@@ -460,7 +460,7 @@ export function AccountCard({
               ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500 dark:text-amber-300"
               : "bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300"
           }`}
-          title={warmingUp ? t("accountCard.warmupSending") : t("accountCard.warmupSend")}
+          data-tooltip={warmingUp ? t("accountCard.warmupSending") : t("accountCard.warmupSend")}
         >
           ⚡
         </button>
@@ -473,7 +473,7 @@ export function AccountCard({
                 ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300"
                 : "bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
             } disabled:opacity-60`}
-            title={
+            data-tooltip={
               autoWarmupManagedByAll
                 ? t("accountCard.autoAll")
                 : autoWarmupEnabled
@@ -492,14 +492,14 @@ export function AccountCard({
               ? "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-500"
               : "bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
           }`}
-          title={t("accountCard.refreshUsage")}
+          data-tooltip={t("accountCard.refreshUsage")}
         >
           <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
         </button>
         <button
           onClick={onDelete}
           className="px-3 py-2 text-sm rounded-lg bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-300 transition-colors"
-          title={t("accountCard.remove")}
+          data-tooltip={t("accountCard.remove")}
         >
           ✕
         </button>

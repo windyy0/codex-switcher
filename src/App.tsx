@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAccounts } from "./hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
 import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
+import { SelectMenu } from "./components/SelectMenu";
 import type { AccountWithUsage, CodexProcessInfo, DockDisplayMode, UsageInfo } from "./types";
 import {
   exportFullBackupFile,
@@ -225,9 +226,9 @@ function App() {
   const [timedWarmupTimes, setTimedWarmupTimes] = useState<string[]>(() =>
     readTimedWarmupTimes()
   );
-  const [isTimedWarmupOpen, setIsTimedWarmupOpen] = useState(false);
   const [timedWarmupRunning, setTimedWarmupRunning] = useState(false);
   const [timedWarmupDraft, setTimedWarmupDraft] = useState("");
+  const [currentPage, setCurrentPage] = useState<"accounts" | "settings">("accounts");
   const [maskedAccounts, setMaskedAccounts] = useState<Set<string>>(new Set());
   const [otherAccountsSort, setOtherAccountsSort] = useState<
     | "deadline_asc"
@@ -239,7 +240,6 @@ function App() {
   >("deadline_asc");
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
-  const timedWarmupRef = useRef<HTMLDivElement | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readStoredTheme);
   const [languagePreference, setLanguagePreference] = useState<AppLanguage>(
     getLanguagePreference
@@ -441,20 +441,6 @@ function App() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isActionsMenuOpen]);
-
-  useEffect(() => {
-    if (!isTimedWarmupOpen) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!timedWarmupRef.current) return;
-      if (!timedWarmupRef.current.contains(event.target as Node)) {
-        setIsTimedWarmupOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isTimedWarmupOpen]);
 
   useEffect(() => {
     applyTheme(themeMode);
@@ -829,13 +815,6 @@ function App() {
     [t]
   );
 
-  const headerAutoWarmupLabel = useMemo(() => {
-    if (autoWarmupRunningIds.size > 0) return t("warmup.autoWarming");
-    return autoWarmupAllEnabled || autoWarmupAccountIds.size > 0
-      ? t("warmup.autoOn")
-      : t("warmup.autoOff");
-  }, [autoWarmupAccountIds.size, autoWarmupAllEnabled, autoWarmupRunningIds, t]);
-
   const timedWarmupTargetsReady = useMemo(
     () =>
       accounts.length > 0 &&
@@ -1028,19 +1007,6 @@ function App() {
   const handleRemoveTimedWarmupTime = useCallback((time: string) => {
     setTimedWarmupTimes((prev) => prev.filter((entry) => entry !== time));
   }, []);
-
-  const timedWarmupLabel = useMemo(() => {
-    if (timedWarmupRunning) return t("warmup.timedWarming");
-    if (!timedWarmupEnabled || timedWarmupTimes.length === 0) return t("warmup.timedOff");
-
-    const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const upcoming = timedWarmupTimes.find((time) => {
-      const [hours, minutes] = time.split(":").map(Number);
-      return hours * 60 + minutes > nowMinutes;
-    });
-    return t("warmup.timedNext", { time: upcoming ?? timedWarmupTimes[0] });
-  }, [timedWarmupEnabled, timedWarmupRunning, timedWarmupTimes, t]);
 
   const handleExportSlimText = async () => {
     setConfigModalMode("slim_export");
@@ -1266,7 +1232,7 @@ function App() {
                   void appWindow.minimize();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-                title={t("window.minimize")}
+                data-tooltip={t("window.minimize")}
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M5 12h14" strokeWidth="2" strokeLinecap="round" />
@@ -1277,7 +1243,7 @@ function App() {
                   void appWindow.toggleMaximize();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-                title={isWindowMaximized ? t("window.restore") : t("window.maximize")}
+                data-tooltip={isWindowMaximized ? t("window.restore") : t("window.maximize")}
               >
                 {isWindowMaximized ? (
                   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -1295,7 +1261,7 @@ function App() {
                   void appWindow.close();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-500 hover:text-white dark:text-gray-400 dark:hover:bg-red-500 dark:hover:text-white"
-                title={t("window.close")}
+                data-tooltip={t("window.close")}
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" strokeLinecap="round" />
@@ -1305,6 +1271,18 @@ function App() {
           )}
         </div>
 
+        {currentPage === "settings" ? (
+          <div className="mx-auto max-w-5xl px-6 py-4">
+            <button
+              onClick={() => setCurrentPage("accounts")}
+              className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-lg font-semibold text-gray-900 transition-colors hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800"
+              aria-label={t("settings.backToAccounts")}
+            >
+              <span aria-hidden="true">←</span>
+              {t("settings.title")}
+            </button>
+          </div>
+        ) : (
         <div className="max-w-5xl mx-auto px-6 py-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
             <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -1339,7 +1317,7 @@ function App() {
                           }}
                           disabled={isForceClosingCodex}
                           className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
-                          title={t("header.forceCloseTitle")}
+                          data-tooltip={t("header.forceCloseTitle")}
                         >
                           {t("header.forceClose")}
                         </button>
@@ -1351,7 +1329,7 @@ function App() {
                       onClick={handleOpenCodexApp}
                       disabled={isOpeningCodex}
                       className="inline-flex items-center rounded-md border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100 disabled:opacity-50 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/30"
-                      title={t("header.openCodex")}
+                      data-tooltip={t("header.openCodex")}
                     >
                       {isOpeningCodex ? t("header.opening") : t("header.openCodex")}
                     </button>
@@ -1361,10 +1339,12 @@ function App() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2 shrink-0 md:ml-4 md:w-max md:flex-nowrap md:justify-end">
+              {currentPage === "accounts" && (
+                <>
               <button
                 onClick={toggleMaskAll}
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
-                title={allMasked ? t("header.showAll") : t("header.hideAll")}
+                data-tooltip={allMasked ? t("header.showAll") : t("header.hideAll")}
               >
                 {allMasked ? (
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1386,7 +1366,7 @@ function App() {
                 onClick={handleRefresh}
                 disabled={isRefreshing}
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
-                title={isRefreshing ? t("header.refreshingAll") : t("header.refreshAll")}
+                data-tooltip={isRefreshing ? t("header.refreshingAll") : t("header.refreshAll")}
               >
                 <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
               </button>
@@ -1394,104 +1374,36 @@ function App() {
                 onClick={handleWarmupAll}
                 disabled={isWarmingAll || accounts.length === 0}
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
-                title={t("header.warmupAll")}
+                data-tooltip={t("header.warmupAll")}
               >
                 <span className={isWarmingAll ? "animate-pulse" : ""}>⚡</span>
               </button>
-              <button
-                onClick={() => setAutoWarmupAllEnabled((prev) => !prev)}
-                disabled={accounts.length === 0}
-                className={`flex h-10 items-center justify-center rounded-lg px-3 text-xs font-semibold transition-colors disabled:opacity-50 shrink-0 whitespace-nowrap ${
-                  autoWarmupAllEnabled
-                    ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                }`}
-                title={
-                  autoWarmupAllEnabled
-                    ? t("header.disableAutoAll")
-                    : t("header.enableAutoAll")
-                }
-              >
-                {headerAutoWarmupLabel}
-              </button>
-              <div className="relative shrink-0" ref={timedWarmupRef}>
-                <button
-                  onClick={() => setIsTimedWarmupOpen((prev) => !prev)}
-                  className={`flex h-10 items-center justify-center rounded-lg px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
-                    timedWarmupEnabled
-                      ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                  }`}
-                  title={t("header.timedTitle")}
-                >
-                  {timedWarmupLabel} ▾
-                </button>
-                {isTimedWarmupOpen && (
-                  <div className="absolute right-0 z-20 mt-2 w-64 rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-900">
-                    <label className="flex items-center justify-between text-sm font-medium text-gray-800 dark:text-gray-100">
-                      <span>{t("header.timedWarmup")}</span>
-                      <input
-                        type="checkbox"
-                        checked={timedWarmupEnabled}
-                        onChange={(e) => setTimedWarmupEnabled(e.target.checked)}
-                        className="h-4 w-4 accent-emerald-600"
-                      />
-                    </label>
-                    <div className="mt-3 space-y-1">
-                      {timedWarmupTimes.length === 0 ? (
-                        <p className="text-xs italic text-gray-400 dark:text-gray-500">
-                          {t("header.noTimes")}
-                        </p>
-                      ) : (
-                        timedWarmupTimes.map((time) => (
-                          <div
-                            key={time}
-                            className="flex items-center justify-between rounded-md bg-gray-50 px-2 py-1 text-sm dark:bg-gray-800"
-                          >
-                            <span className="font-mono text-gray-800 dark:text-gray-100">
-                              {time}
-                            </span>
-                            <button
-                              onClick={() => handleRemoveTimedWarmupTime(time)}
-                              className="text-gray-400 transition-colors hover:text-red-500"
-                              title={t("header.removeTime", { time })}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-
-                    <div className="mt-3 flex items-center gap-2">
-                      <input
-                        type="time"
-                        value={timedWarmupDraft}
-                        onChange={(e) => setTimedWarmupDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleAddTimedWarmupTime();
-                        }}
-                        className="h-8 flex-1 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-800 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                      />
-                      <button
-                        onClick={handleAddTimedWarmupTime}
-                        disabled={!timedWarmupDraft}
-                        className="h-8 rounded-md bg-gray-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-gray-800 disabled:opacity-50 dark:bg-black dark:hover:bg-neutral-900"
-                      >
-                        {t("common.add")}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+                </>
+              )}
               <button
                 onClick={() => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"))}
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-lg text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
-                title={themeMode === "dark" ? t("header.lightMode") : t("header.darkMode")}
+                data-tooltip={themeMode === "dark" ? t("header.lightMode") : t("header.darkMode")}
               >
                 {themeMode === "dark" ? "☀" : "☾"}
               </button>
 
+              <button
+                onClick={() => {
+                  setIsActionsMenuOpen(false);
+                  setCurrentPage("settings");
+                }}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                data-tooltip={t("settings.title")}
+                aria-label={t("settings.title")}
+              >
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="12" cy="12" r="3.25" />
+                  <path d="M19.4 15a1.7 1.7 0 00.34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0015 19.4a1.7 1.7 0 00-1.4 1.6H9.6A1.7 1.7 0 008.6 19.4a1.7 1.7 0 00-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 004.6 15 1.7 1.7 0 003 13.6V9.6A1.7 1.7 0 004.6 8.6a1.7 1.7 0 00-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 009 4.6 1.7 1.7 0 0010.4 3h4A1.7 1.7 0 0015.4 4.6a1.7 1.7 0 001.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0019.4 9a1.7 1.7 0 001.6 1.4v4a1.7 1.7 0 00-1.6.6z" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+
+              {currentPage === "accounts" && (
               <div className="relative" ref={actionsMenuRef}>
                 <button
                   onClick={() => setIsActionsMenuOpen((prev) => !prev)}
@@ -1550,32 +1462,150 @@ function App() {
                     >
                       {isImportingFull ? t("backup.importing") : t("backup.importFull")}
                     </button>
-                    <div className="my-1 border-t border-gray-100 dark:border-neutral-800" />
-                    <label className="block px-3 py-2 text-xs text-gray-500 dark:text-neutral-400">
-                      {t("language.label")}
-                      <select
-                        value={languagePreference}
-                        onChange={(event) => {
-                          void handleLanguageChange(event.target.value as AppLanguage);
-                        }}
-                        className="mt-1.5 w-full rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-700 outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-white"
-                      >
-                        <option value={SYSTEM_LANGUAGE}>{t("language.system")}</option>
-                        {supportedLanguages.map(({ code, label }) => (
-                          <option key={code} value={code}>{label}</option>
-                        ))}
-                      </select>
-                    </label>
                   </div>
                 )}
               </div>
+              )}
             </div>
           </div>
         </div>
+        )}
       </header>
 
       {/* Main Content */}
       <main className="max-w-5xl mx-auto px-6 py-8">
+        {currentPage === "settings" ? (
+          <div className="mx-auto max-w-3xl space-y-6">
+            <section>
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                {t("settings.warmupSection")}
+              </h3>
+              <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                <div className="flex items-center justify-between gap-6 p-5">
+                  <div>
+                    <div className="font-semibold text-gray-900 dark:text-gray-100">
+                      {t("settings.autoWarmup")}
+                    </div>
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      {t("settings.autoWarmupDescription")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoWarmupAllEnabled}
+                    aria-label={t("settings.autoWarmup")}
+                    onClick={() => setAutoWarmupAllEnabled((enabled) => !enabled)}
+                    className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900 ${
+                      autoWarmupAllEnabled ? "bg-emerald-500" : "bg-gray-300 dark:bg-gray-700"
+                    }`}
+                  >
+                    <span aria-hidden="true" className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${autoWarmupAllEnabled ? "translate-x-6" : "translate-x-1"}`} />
+                  </button>
+                </div>
+
+                <div className="border-t border-gray-100 dark:border-gray-800">
+                  <div className="flex items-center justify-between gap-6 p-5">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-gray-900 dark:text-gray-100">
+                          {t("settings.timedWarmup")}
+                        </span>
+                        {timedWarmupRunning && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                            {t("warmup.timedWarming")}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        {t("settings.timedWarmupDescription")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={timedWarmupEnabled}
+                      aria-label={t("settings.timedWarmup")}
+                      onClick={() => setTimedWarmupEnabled((enabled) => !enabled)}
+                      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900 ${
+                        timedWarmupEnabled ? "bg-emerald-500" : "bg-gray-300 dark:bg-gray-700"
+                      }`}
+                    >
+                      <span aria-hidden="true" className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${timedWarmupEnabled ? "translate-x-6" : "translate-x-1"}`} />
+                    </button>
+                  </div>
+
+                  {timedWarmupEnabled && (
+                    <div className="border-t border-gray-100 bg-gray-50/70 px-5 py-4 dark:border-gray-800 dark:bg-gray-950/40">
+                      <div className="flex flex-wrap gap-2">
+                        {timedWarmupTimes.length === 0 ? (
+                          <p className="py-1 text-sm italic text-gray-400 dark:text-gray-500">
+                            {t("header.noTimes")}
+                          </p>
+                        ) : (
+                          timedWarmupTimes.map((time) => (
+                            <div key={time} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                              <span className="font-mono font-medium text-gray-800 dark:text-gray-100">{time}</span>
+                              <button
+                                onClick={() => handleRemoveTimedWarmupTime(time)}
+                                className="text-gray-400 transition-colors hover:text-red-500"
+                                data-tooltip={t("header.removeTime", { time })}
+                                aria-label={t("header.removeTime", { time })}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <div className="mt-3 flex max-w-xs items-center gap-2">
+                        <input
+                          type="time"
+                          value={timedWarmupDraft}
+                          onChange={(event) => setTimedWarmupDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") handleAddTimedWarmupTime();
+                          }}
+                          aria-label={t("settings.warmupTime")}
+                          className="h-10 min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 outline-none transition-shadow focus:border-gray-400 focus:ring-2 focus:ring-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:focus:ring-gray-700"
+                        />
+                        <button
+                          onClick={handleAddTimedWarmupTime}
+                          disabled={!timedWarmupDraft}
+                          className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:opacity-40 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
+                        >
+                          {t("common.add")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                {t("settings.languageSection")}
+              </h3>
+              <div className="flex items-center justify-between gap-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                <div>
+                  <div className="font-semibold text-gray-900 dark:text-gray-100">{t("language.label")}</div>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("settings.languageDescription")}</p>
+                </div>
+                <SelectMenu
+                  value={languagePreference}
+                  onChange={(value) => void handleLanguageChange(value as AppLanguage)}
+                  ariaLabel={t("language.label")}
+                  options={[
+                    { value: SYSTEM_LANGUAGE, label: t("language.system") },
+                    ...supportedLanguages.map(({ code, label }) => ({ value: code, label })),
+                  ]}
+                />
+              </div>
+            </section>
+          </div>
+        ) : (
+          <>
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="animate-spin h-10 w-10 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mb-4"></div>
@@ -1657,13 +1687,13 @@ function App() {
                     <label htmlFor="other-accounts-sort" className="text-xs text-gray-500 dark:text-gray-400">
                       {t("accounts.sort")}
                     </label>
-                    <div className="relative">
-                      <select
+                    <div>
+                      <SelectMenu
                         id="other-accounts-sort"
                         value={otherAccountsSort}
-                        onChange={(e) =>
+                        onChange={(value) =>
                           setOtherAccountsSort(
-                            e.target.value as
+                            value as
                               | "deadline_asc"
                               | "deadline_desc"
                               | "remaining_desc"
@@ -1672,34 +1702,16 @@ function App() {
                               | "subscription_desc"
                           )
                         }
-                        className="appearance-none font-sans text-xs sm:text-sm font-medium pl-3 pr-9 py-2 rounded-xl border border-gray-300 dark:border-gray-700 bg-gradient-to-b from-white to-gray-50 dark:from-gray-900 dark:to-gray-800 text-gray-700 dark:text-gray-200 shadow-sm hover:border-gray-400 dark:hover:border-gray-600 hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-300 dark:focus:ring-gray-600 focus:border-gray-400 dark:focus:border-gray-600 transition-all"
-                      >
-                        <option value="deadline_asc">{t("accounts.sortResetAsc")}</option>
-                        <option value="deadline_desc">{t("accounts.sortResetDesc")}</option>
-                        <option value="remaining_desc">
-                          {t("accounts.sortRemainingDesc")}
-                        </option>
-                        <option value="remaining_asc">
-                          {t("accounts.sortRemainingAsc")}
-                        </option>
-                        <option value="subscription_asc">
-                          {t("accounts.sortExpiryAsc")}
-                        </option>
-                        <option value="subscription_desc">
-                          {t("accounts.sortExpiryDesc")}
-                        </option>
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500 dark:text-gray-400">
-                        <svg
-                          className="h-4 w-4"
-                          viewBox="0 0 20 20"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <path d="M6 8l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </span>
+                        ariaLabel={t("accounts.sort")}
+                        options={[
+                          { value: "deadline_asc", label: t("accounts.sortResetAsc") },
+                          { value: "deadline_desc", label: t("accounts.sortResetDesc") },
+                          { value: "remaining_desc", label: t("accounts.sortRemainingDesc") },
+                          { value: "remaining_asc", label: t("accounts.sortRemainingAsc") },
+                          { value: "subscription_asc", label: t("accounts.sortExpiryAsc") },
+                          { value: "subscription_desc", label: t("accounts.sortExpiryDesc") },
+                        ]}
+                      />
                     </div>
                   </div>
                 </div>
@@ -1740,6 +1752,8 @@ function App() {
               </section>
             )}
           </div>
+        )}
+          </>
         )}
       </main>
 

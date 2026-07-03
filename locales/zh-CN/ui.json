@@ -15,6 +15,19 @@
     "unknownError": "未知错误"
   },
   "language": { "label": "语言", "system": "跟随系统", "changeFailed": "语言切换失败：{{error}}" },
+  "settings": {
+    "title": "设置",
+    "backToAccounts": "账户",
+    "description": "配置 Codex Switcher 的全局行为。",
+    "warmupSection": "预热设置",
+    "autoWarmup": "自动预热",
+    "autoWarmupDescription": "根据用量状态自动为符合条件的账户执行预热。",
+    "timedWarmup": "定时预热",
+    "timedWarmupDescription": "每天在指定时间为符合条件的账户执行预热。",
+    "warmupTime": "预热时间",
+    "languageSection": "语言",
+    "languageDescription": "选择应用界面使用的语言。"
+  },
   "window": { "minimize": "最小化", "maximize": "最大化", "restore": "还原", "close": "关闭" },
   "header": {
     "codexRunning": "{{count}} 个 Codex 正在运行",

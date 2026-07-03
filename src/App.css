@@ -9,3 +9,156 @@
 :root.dark {
   color-scheme: dark;
 }
+
+.app-select {
+  position: relative;
+  min-width: 10rem;
+  color: rgb(55 65 81);
+}
+
+.app-select__trigger {
+  display: flex;
+  width: 100%;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.65rem 0.45rem 0.75rem;
+  border: 1px solid rgb(209 213 219);
+  border-radius: 0.75rem;
+  background: linear-gradient(to bottom, rgb(255 255 255), rgb(249 250 251));
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-align: left;
+  transition: border-color 150ms, box-shadow 150ms, background-color 150ms;
+}
+
+.app-select__trigger:hover {
+  border-color: rgb(156 163 175);
+  box-shadow: 0 2px 5px rgb(15 23 42 / 0.08);
+}
+
+.app-select__trigger:focus-visible {
+  outline: none;
+  border-color: rgb(107 114 128);
+  box-shadow: 0 0 0 3px rgb(156 163 175 / 0.22);
+}
+
+.app-select__chevron {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  color: rgb(107 114 128);
+  transition: transform 150ms;
+}
+
+.app-select__chevron--open { transform: rotate(180deg); }
+
+.app-select__menu {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 1.25rem));
+  padding: 0.3rem;
+  overflow: hidden;
+  border: 1px solid rgb(229 231 235 / 0.95);
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 0.98);
+  box-shadow: 0 12px 30px rgb(15 23 42 / 0.14), 0 3px 8px rgb(15 23 42 / 0.08);
+  backdrop-filter: blur(12px);
+  animation: select-menu-in 120ms ease-out;
+}
+
+.app-select__option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.5rem;
+  color: rgb(55 65 81);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  text-align: left;
+  transition: background-color 120ms;
+}
+
+.app-select__option:hover,
+.app-select__option:focus-visible,
+.app-select__option[aria-selected="true"] {
+  outline: none;
+  background: rgb(243 244 246);
+}
+
+.app-select__check { color: rgb(5 150 105); font-weight: 700; }
+.app-select--compact { min-width: 5.5rem; }
+.app-select--compact .app-select__trigger { min-height: 1.65rem; padding: 0.2rem 0.4rem 0.2rem 0.55rem; border-radius: 0.5rem; font-size: 0.6875rem; }
+.app-select--compact .app-select__menu { border-radius: 0.625rem; }
+
+.dark .app-select { color: rgb(229 231 235); }
+.dark .app-select__trigger { border-color: rgb(55 65 81); background: linear-gradient(to bottom, rgb(31 41 55), rgb(17 24 39)); box-shadow: 0 1px 2px rgb(0 0 0 / 0.2); }
+.dark .app-select__trigger:hover { border-color: rgb(75 85 99); }
+.dark .app-select__trigger:focus-visible { border-color: rgb(107 114 128); box-shadow: 0 0 0 3px rgb(75 85 99 / 0.4); }
+.dark .app-select__chevron { color: rgb(156 163 175); }
+.dark .app-select__menu { border-color: rgb(55 65 81 / 0.95); background: rgb(17 24 39 / 0.98); box-shadow: 0 12px 30px rgb(0 0 0 / 0.35), 0 3px 8px rgb(0 0 0 / 0.25); }
+.dark .app-select__option { color: rgb(229 231 235); }
+.dark .app-select__option:hover,
+.dark .app-select__option:focus-visible,
+.dark .app-select__option[aria-selected="true"] { background: rgb(31 41 55); }
+
+@keyframes select-menu-in {
+  from { opacity: 0; transform: translateY(-0.25rem) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.app-tooltip {
+  position: fixed;
+  z-index: 10000;
+  width: max-content;
+  max-width: min(18rem, calc(100vw - 20px));
+  padding: 0.4rem 0.65rem;
+  border: 1px solid rgb(229 231 235 / 0.9);
+  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.96);
+  box-shadow: 0 8px 24px rgb(15 23 42 / 0.13), 0 2px 6px rgb(15 23 42 / 0.08);
+  color: rgb(55 65 81);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+  animation: tooltip-in 120ms ease-out;
+}
+
+.app-tooltip--bottom {
+  transform: translate(-50%, 0);
+  transform-origin: top center;
+}
+
+.app-tooltip--top {
+  transform: translate(-50%, -100%);
+  transform-origin: bottom center;
+}
+
+.dark .app-tooltip {
+  border-color: rgb(75 85 99 / 0.85);
+  background: rgb(31 41 55 / 0.96);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.2);
+  color: rgb(243 244 246);
+}
+
+@keyframes tooltip-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-tooltip { animation: none; }
+}

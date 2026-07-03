@@ -7,6 +7,7 @@ import type {
 import { invokeBackend } from "../lib/platform";
 import { useTranslation } from "react-i18next";
 import appI18n from "../i18n";
+import { SelectMenu } from "./SelectMenu";
 
 const PROFILE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -179,26 +180,20 @@ function TokenActivity({ daily }: { daily: AccountDailyUsage[] }) {
         <span className="font-medium text-gray-600 dark:text-gray-300">{t("stats.tokenActivity")}</span>
         <div className="flex items-center gap-2">
           <span className="text-gray-400 dark:text-gray-500">{activityRangeLabel(range)}</span>
-          <select
-            value={range}
-            onChange={(event) => {
-              const value = event.target.value;
+          <SelectMenu
+            value={String(range)}
+            onChange={(value) => {
               setRange(value === "all" ? "all" : (Number(value) as ActivityRange));
             }}
-            className="h-6 rounded-md border border-gray-200 bg-gray-50 px-1.5 text-[11px] text-gray-600 outline-none dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300"
-            aria-label={t("stats.tokenActivityRange")}
-          >
-            {([
-              { value: 30, label: t("stats.optionThirty") },
-              { value: 90, label: t("stats.optionThreeMonths") },
-              { value: 180, label: t("stats.optionSixMonths") },
+            ariaLabel={t("stats.tokenActivityRange")}
+            compact
+            options={[
+              { value: "30", label: t("stats.optionThirty") },
+              { value: "90", label: t("stats.optionThreeMonths") },
+              { value: "180", label: t("stats.optionSixMonths") },
               { value: "all", label: t("stats.optionAll") },
-            ] as { value: ActivityRange; label: string }[]).map((option) => (
-              <option key={option.label} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            ]}
+          />
         </div>
       </div>
       <div
@@ -458,7 +453,7 @@ export function AccountUsageStats({
             onClick={() => void loadStats()}
             disabled={loading || !enabled}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-            title={t("stats.refresh")}
+            data-tooltip={t("stats.refresh")}
           >
             <span className={loading ? "inline-block animate-spin" : ""}>↻</span>
           </button>

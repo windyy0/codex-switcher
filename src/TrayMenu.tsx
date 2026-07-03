@@ -349,7 +349,7 @@ function TrayMenu() {
         <button
           onClick={() => void handleAutoWarmupToggle()}
           disabled={accounts.length === 0}
-          title={
+          data-tooltip={
             autoWarmupAllEnabled
               ? t("header.disableAutoAll")
               : t("header.enableAutoAll")
@@ -365,7 +365,7 @@ function TrayMenu() {
         <button
           onClick={() => void handleRefresh()}
           disabled={refreshing}
-          title={t("accountCard.refreshUsage")}
+          data-tooltip={t("accountCard.refreshUsage")}
           className="flex h-6 w-6 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
         >
           <span className={`text-base leading-none ${refreshing ? "inline-block animate-spin" : ""}`}>
