@@ -9,6 +9,11 @@
   Easily switch between accounts, monitor usage, schedule warm-ups, and stay in control of your quota
 </p>
 
+<p align="center">
+  <a href="README.md">简体中文</a> · <strong>English</strong><br>
+  <sub>Built upon <a href="https://github.com/Lampese/codex-switcher">Lampese/codex-switcher</a>, with thanks to the original author and contributors for their excellent work.</sub>
+</p>
+
 ## Features
 
 - **Multi-Account Management** – Add, rename, mask, import, export, and manage multiple Codex accounts in one place
@@ -22,6 +27,25 @@
 - **Rate-Limit Monitoring** – View real-time 5-hour session and weekly usage, reset timing, credits, and subscription expiry
 - **Blocked Switch Recovery** – Detect running Codex sessions and offer a force-close flow before retrying the account switch
 - **Dual Login Mode** – Authenticate with ChatGPT OAuth or import existing `auth.json` files
+
+## Screenshots
+
+### Main Window
+
+<p align="center">
+  <img src="docs/screenshots/main.png" alt="Codex Switcher main window" width="900">
+</p>
+
+<table>
+  <tr>
+    <td align="center"><strong>Floating Window</strong></td>
+    <td align="center"><strong>Taskbar Mode</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/floating-window.png" alt="Codex Switcher floating window"></td>
+    <td align="center"><img src="docs/screenshots/taskbar.png" alt="Codex Switcher taskbar mode"></td>
+  </tr>
+</table>
 
 ## Installation
 

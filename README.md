@@ -9,6 +9,11 @@
   轻松切换账户、监控用量、定时预热，全面掌控配额使用情况
 </p>
 
+<p align="center">
+  <strong>简体中文</strong> · <a href="README_EN.md">English</a><br>
+  <sub>本项目基于 <a href="https://github.com/Lampese/codex-switcher">Lampese/codex-switcher</a> 开发，感谢原作者及贡献者的出色工作。</sub>
+</p>
+
 ## 功能特性
 
 - **多账户管理** – 一站式添加、重命名、隐藏、导入、导出和管理多个 Codex 账户
@@ -24,6 +29,25 @@
 - **速率限制监控** – 实时查看 5 小时会话和每周用量、重置时间、配额余额及订阅到期时间
 - **阻塞切换恢复** – 检测正在运行的 Codex 会话，在重试账户切换前提供强制关闭流程
 - **双模式登录** – 支持 ChatGPT OAuth 认证或导入已有的 `auth.json` 文件
+
+## 界面预览
+
+### 主页面
+
+<p align="center">
+  <img src="docs/screenshots/main.png" alt="Codex Switcher 主页面" width="900">
+</p>
+
+<table>
+  <tr>
+    <td align="center"><strong>悬浮窗</strong></td>
+    <td align="center"><strong>任务栏模式</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/floating-window.png" alt="Codex Switcher 悬浮窗"></td>
+    <td align="center"><img src="docs/screenshots/taskbar.png" alt="Codex Switcher 任务栏模式"></td>
+  </tr>
+</table>
 
 ## 安装
 
