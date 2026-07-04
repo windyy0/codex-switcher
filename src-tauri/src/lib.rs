@@ -8,6 +8,10 @@ pub mod commands;
 pub mod i18n;
 #[cfg(desktop)]
 pub mod tray;
+#[cfg(desktop)]
+pub mod floating;
+#[cfg(target_os = "windows")]
+pub mod taskbar_widget;
 pub mod types;
 pub mod web;
 
@@ -15,15 +19,13 @@ use commands::{
     ack_close_behavior_prompt, add_account_from_file, cancel_login, check_codex_processes,
     complete_close_behavior, complete_login, delete_account, export_accounts_full_encrypted_file,
     export_accounts_slim_text, get_account_usage_stats, get_active_account_info, get_app_language,
-    get_dock_display_mode, get_masked_account_ids, get_usage, hide_tray_window,
+    get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage, hide_tray_window,
     import_accounts_full_encrypted_file, import_accounts_slim_text, kill_codex_processes,
     list_accounts, open_main_window, quit_app, refresh_account_metadata,
     refresh_all_accounts_usage, rename_account, report_usage, set_app_language,
-    set_dock_display_mode, set_masked_account_ids, start_login, switch_account, warmup_account,
+    set_app_settings, set_dock_display_mode, set_masked_account_ids, start_login, switch_account, warmup_account,
     warmup_all_accounts,
 };
-use tauri::Emitter;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -37,6 +39,9 @@ pub fn run() {
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
                 app_menu::setup(app.handle())?;
                 tray::setup(app.handle())?;
+                floating::setup(app.handle())?;
+                #[cfg(target_os = "windows")]
+                taskbar_widget::setup(app.handle());
             }
             Ok(())
         })
@@ -102,6 +107,8 @@ pub fn run() {
             ack_close_behavior_prompt,
             get_app_language,
             set_app_language,
+            get_app_settings,
+            set_app_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

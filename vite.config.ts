@@ -15,6 +15,8 @@ export default defineConfig(async () => ({
       input: {
         main: "index.html",
         tray: "tray.html",
+        floating: "floating.html",
+        floatingControls: "floating-controls.html",
       },
     },
   },

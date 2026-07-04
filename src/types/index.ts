@@ -2,6 +2,34 @@
 
 export type AuthMode = "api_key" | "chat_g_p_t";
 export type DockDisplayMode = "show_in_dock" | "menu_bar_only";
+export type TaskbarLayout = "detailed" | "minimal" | "compact";
+export type TaskbarDoubleClickAction = "toggle_floating" | "open_main";
+export type FloatingField = "account" | "primary_usage" | "primary_reset" | "secondary_usage";
+
+export interface AppSettings {
+  tray_display_mode: "icon_and_session" | "active_usage_text" | "hidden";
+  dock_display_mode: DockDisplayMode;
+  language: string;
+  close_behavior_prompt_enabled: boolean;
+  taskbar: {
+    enabled: boolean;
+    layout: TaskbarLayout;
+    double_click_action: TaskbarDoubleClickAction;
+    last_error: string | null;
+    offset_x: number;
+    offset_y: number;
+  };
+  floating: {
+    enabled: boolean;
+    visible: boolean;
+    click_through: boolean;
+    always_on_top: boolean;
+    opacity: number;
+    position: [number, number] | null;
+    size: [number, number] | null;
+    visible_fields: FloatingField[];
+  };
+}
 
 export interface AccountInfo {
   id: string;

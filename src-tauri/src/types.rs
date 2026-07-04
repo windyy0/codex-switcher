@@ -36,6 +36,93 @@ pub enum DockDisplayMode {
     MenuBarOnly,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskbarLayout {
+    #[default]
+    Detailed,
+    Minimal,
+    Compact,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskbarDoubleClickAction {
+    #[default]
+    ToggleFloating,
+    OpenMain,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TaskbarSettings {
+    pub enabled: bool,
+    pub layout: TaskbarLayout,
+    pub double_click_action: TaskbarDoubleClickAction,
+    pub last_error: Option<String>,
+    pub offset_x: i32,
+    pub offset_y: i32,
+}
+
+impl Default for TaskbarSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            layout: TaskbarLayout::Detailed,
+            double_click_action: TaskbarDoubleClickAction::ToggleFloating,
+            last_error: None,
+            offset_x: 0,
+            offset_y: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FloatingField {
+    Account,
+    PrimaryUsage,
+    PrimaryReset,
+    SecondaryUsage,
+}
+
+fn default_floating_fields() -> Vec<FloatingField> {
+    vec![
+        FloatingField::Account,
+        FloatingField::PrimaryUsage,
+        FloatingField::PrimaryReset,
+        FloatingField::SecondaryUsage,
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FloatingSettings {
+    pub enabled: bool,
+    pub visible: bool,
+    pub click_through: bool,
+    pub always_on_top: bool,
+    pub opacity: f64,
+    pub position: Option<(i32, i32)>,
+    pub size: Option<(u32, u32)>,
+    pub visible_fields: Vec<FloatingField>,
+}
+
+impl Default for FloatingSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            visible: false,
+            click_through: false,
+            always_on_top: true,
+            opacity: 0.92,
+            position: None,
+            size: None,
+            visible_fields: default_floating_fields(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AppLanguage(String);
@@ -71,6 +158,8 @@ pub struct AppSettings {
     pub language: AppLanguage,
     #[serde(default = "default_close_behavior_prompt_enabled")]
     pub close_behavior_prompt_enabled: bool,
+    pub taskbar: TaskbarSettings,
+    pub floating: FloatingSettings,
 }
 
 impl Default for AppSettings {
@@ -80,6 +169,8 @@ impl Default for AppSettings {
             dock_display_mode: DockDisplayMode::default(),
             language: AppLanguage::default(),
             close_behavior_prompt_enabled: true,
+            taskbar: TaskbarSettings::default(),
+            floating: FloatingSettings::default(),
         }
     }
 }
@@ -466,5 +557,11 @@ mod tests {
         assert_eq!(settings.dock_display_mode, DockDisplayMode::ShowInDock);
         assert_eq!(settings.language, AppLanguage::default());
         assert!(settings.close_behavior_prompt_enabled);
+        assert!(settings.taskbar.enabled);
+        assert_eq!(settings.taskbar.offset_x, 0);
+        assert_eq!(settings.taskbar.offset_y, 0);
+        assert!(settings.floating.enabled);
+        assert!(!settings.floating.visible);
+        assert_eq!(settings.floating.opacity, 0.92);
     }
 }

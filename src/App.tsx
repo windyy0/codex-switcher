@@ -5,6 +5,7 @@ import { useAccounts } from "./hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
 import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
 import { SelectMenu } from "./components/SelectMenu";
+import { WindowsDisplaySettings } from "./components/WindowsDisplaySettings";
 import type { AccountWithUsage, CodexProcessInfo, DockDisplayMode, UsageInfo } from "./types";
 import {
   exportFullBackupFile,
@@ -67,6 +68,7 @@ const appWindow = getCurrentWindow();
 const isMacOs =
   typeof navigator !== "undefined" &&
   /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
+const isWindows = isTauriRuntime() && typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
 
 function readStoredStringArray(key: string): string[] {
   if (typeof window === "undefined") return [];
@@ -1233,6 +1235,7 @@ function App() {
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
                 data-tooltip={t("window.minimize")}
+                data-tooltip-placement="bottom"
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M5 12h14" strokeWidth="2" strokeLinecap="round" />
@@ -1244,6 +1247,7 @@ function App() {
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
                 data-tooltip={isWindowMaximized ? t("window.restore") : t("window.maximize")}
+                data-tooltip-placement="bottom"
               >
                 {isWindowMaximized ? (
                   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -1262,6 +1266,7 @@ function App() {
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-500 hover:text-white dark:text-gray-400 dark:hover:bg-red-500 dark:hover:text-white"
                 data-tooltip={t("window.close")}
+                data-tooltip-placement="bottom"
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" strokeLinecap="round" />
@@ -1272,15 +1277,19 @@ function App() {
         </div>
 
         {currentPage === "settings" ? (
-          <div className="mx-auto max-w-5xl px-6 py-4">
+          <div className="mx-auto flex max-w-5xl items-center gap-3 px-6 py-4">
             <button
               onClick={() => setCurrentPage("accounts")}
-              className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-lg font-semibold text-gray-900 transition-colors hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800"
+              className="group inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-100"
               aria-label={t("settings.backToAccounts")}
+              data-tooltip={t("settings.backToAccounts")}
             >
-              <span aria-hidden="true">←</span>
-              {t("settings.title")}
+              <svg aria-hidden="true" className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 12H5" />
+                <path d="m12 19-7-7 7-7" />
+              </svg>
             </button>
+            <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-gray-100">{t("settings.title")}</h1>
           </div>
         ) : (
         <div className="max-w-5xl mx-auto px-6 py-4">
@@ -1603,6 +1612,8 @@ function App() {
                 />
               </div>
             </section>
+            {isWindows && <WindowsDisplaySettings section="floating" />}
+            {isWindows && <WindowsDisplaySettings section="taskbar" />}
           </div>
         ) : (
           <>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const SHOW_DELAY_MS = 350;
@@ -20,7 +20,15 @@ function tooltipTarget(target: EventTarget | null): HTMLElement | null {
 
 export function TooltipLayer() {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [adjustedX, setAdjustedX] = useState(0);
   const timerRef = useRef<number | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!tooltip || !tooltipRef.current) return;
+    const halfWidth = tooltipRef.current.getBoundingClientRect().width / 2;
+    setAdjustedX(Math.min(window.innerWidth - VIEWPORT_GAP - halfWidth, Math.max(VIEWPORT_GAP + halfWidth, tooltip.x)));
+  }, [tooltip]);
 
   useEffect(() => {
     const clearTimer = () => {
@@ -42,14 +50,13 @@ export function TooltipLayer() {
       clearTimer();
       const reveal = () => {
         const rect = element.getBoundingClientRect();
-        const placement = rect.bottom + 52 < window.innerHeight ? "bottom" : "top";
-        const maxTooltipHalfWidth = Math.min(144, (window.innerWidth - VIEWPORT_GAP * 2) / 2);
+        const requestedPlacement = element.dataset.tooltipPlacement;
+        const placement = requestedPlacement === "bottom" || requestedPlacement === "top"
+          ? requestedPlacement
+          : rect.bottom + 52 < window.innerHeight ? "bottom" : "top";
         setTooltip({
           text,
-          x: Math.min(
-            window.innerWidth - VIEWPORT_GAP - maxTooltipHalfWidth,
-            Math.max(VIEWPORT_GAP + maxTooltipHalfWidth, rect.left + rect.width / 2),
-          ),
+          x: rect.left + rect.width / 2,
           y: placement === "bottom" ? rect.bottom + TOOLTIP_OFFSET : rect.top - TOOLTIP_OFFSET,
           placement,
         });
@@ -101,9 +108,10 @@ export function TooltipLayer() {
 
   return createPortal(
     <div
+      ref={tooltipRef}
       className={`app-tooltip app-tooltip--${tooltip.placement}`}
       role="tooltip"
-      style={{ left: tooltip.x, top: tooltip.y }}
+      style={{ left: adjustedX || tooltip.x, top: tooltip.y }}
     >
       {tooltip.text}
     </div>,

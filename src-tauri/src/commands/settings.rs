@@ -2,10 +2,36 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     auth::{load_app_settings, save_app_settings},
-    types::AppLanguage,
+    types::{AppLanguage, AppSettings},
 };
 
 pub const LANGUAGE_CHANGED_EVENT: &str = "language-changed";
+pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
+
+#[tauri::command]
+pub fn get_app_settings() -> AppSettings {
+    load_app_settings().unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn set_app_settings(app: AppHandle, mut settings: AppSettings) -> Result<AppSettings, String> {
+    settings.floating.opacity = settings.floating.opacity.clamp(0.25, 1.0);
+    settings.floating.click_through = settings.floating.always_on_top;
+    if settings.floating.visible_fields.is_empty() {
+        settings.floating.visible_fields = crate::types::FloatingSettings::default().visible_fields;
+    }
+    save_app_settings(&settings).map_err(|error| error.to_string())?;
+
+    #[cfg(desktop)]
+    {
+        crate::tray::refresh(&app);
+        crate::floating::apply_settings(&app, &settings);
+        #[cfg(target_os = "windows")]
+        crate::taskbar_widget::apply_settings(&app, &settings);
+    }
+    let _ = app.emit(SETTINGS_CHANGED_EVENT, settings.clone());
+    Ok(settings)
+}
 
 #[tauri::command]
 pub fn get_app_language() -> AppLanguage {
@@ -22,6 +48,12 @@ pub fn set_app_language(app: AppHandle, language: AppLanguage) -> Result<AppLang
             eprintln!("Failed to refresh app menu after language change: {error}");
         }
         crate::tray::refresh(&app);
+        #[cfg(target_os = "windows")]
+        {
+            let settings = load_app_settings().unwrap_or_default();
+            crate::taskbar_widget::apply_settings(&app, &settings);
+            let _ = app.emit(SETTINGS_CHANGED_EVENT, settings);
+        }
     }
 
     let _ = app.emit(LANGUAGE_CHANGED_EVENT, language.clone());

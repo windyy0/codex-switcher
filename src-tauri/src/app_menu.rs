@@ -2,7 +2,7 @@
 
 use tauri::{
     menu::{AboutMetadata, CheckMenuItem, Menu, PredefinedMenuItem, Submenu},
-    AppHandle, Runtime,
+    AppHandle, Manager, Runtime,
 };
 
 #[cfg(target_os = "macos")]
@@ -33,6 +33,11 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let settings = load_app_settings().unwrap_or_default();
     let menu = build_menu(app, &settings)?;
     app.set_menu(menu)?;
+    for label in [crate::commands::window::TRAY_WINDOW, crate::floating::FLOATING_WINDOW, crate::floating::FLOATING_CONTROLS_WINDOW] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.remove_menu();
+        }
+    }
     Ok(())
 }
 

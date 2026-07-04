@@ -3,11 +3,13 @@ use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use tauri::{
-    menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, Runtime, WebviewUrl, WebviewWindowBuilder,
     WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use tauri::menu::Submenu;
 
 use crate::{
     api::usage::get_account_usage,
@@ -30,6 +32,9 @@ const SWITCH_ACCOUNT_BLOCKED_EVENT: &str = "switch-account-blocked";
 const ACCOUNT_ITEM_PREFIX: &str = "account:";
 const OPEN_ITEM_ID: &str = "open";
 const QUIT_ITEM_ID: &str = "quit";
+const FLOATING_VISIBLE_ID: &str = "floating-visible";
+const FLOATING_CLICK_THROUGH_ID: &str = "floating-click-through";
+const TASKBAR_VISIBLE_ID: &str = "taskbar-visible";
 const TRAY_WIDTH: f64 = 300.0;
 const TRAY_HEIGHT: f64 = 420.0;
 
@@ -83,6 +88,10 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
 
 /// Store usage reported by the main app and refresh the native menu labels.
 pub fn ingest_usage<R: Runtime>(app: &AppHandle<R>, usages: Vec<UsageInfo>) {
+    #[cfg(target_os = "windows")]
+    for usage in &usages {
+        crate::taskbar_widget::ingest_usage(usage);
+    }
     if let Ok(mut cache) = TRAY_USAGE.lock() {
         for usage in usages {
             cache.insert(usage.account_id.clone(), usage);
@@ -203,6 +212,17 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, store: &AccountsStore) -> tauri::R
     }
 
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    #[cfg(target_os = "windows")]
+    {
+        let settings = load_app_settings().unwrap_or_default();
+        menu.append(&CheckMenuItemBuilder::with_id(FLOATING_VISIBLE_ID, t("floatingWindow"))
+            .checked(settings.floating.visible).build(app)?)?;
+        menu.append(&CheckMenuItemBuilder::with_id(FLOATING_CLICK_THROUGH_ID, t("clickThrough"))
+            .checked(settings.floating.click_through).build(app)?)?;
+        menu.append(&CheckMenuItemBuilder::with_id(TASKBAR_VISIBLE_ID, t("taskbarWidget"))
+            .checked(settings.taskbar.enabled).build(app)?)?;
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
     #[cfg(target_os = "macos")]
     append_dock_settings_menu(app, &menu)?;
     #[cfg(target_os = "macos")]
@@ -248,6 +268,25 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     match item_id {
         OPEN_ITEM_ID => show_main_window(app),
         QUIT_ITEM_ID => app.exit(0),
+        FLOATING_VISIBLE_ID => {
+            crate::floating::toggle(app);
+            refresh_menu(app);
+        }
+        FLOATING_CLICK_THROUGH_ID => {
+            let enabled = !load_app_settings().unwrap_or_default().floating.click_through;
+            crate::floating::set_click_through(app, enabled);
+            refresh_menu(app);
+        }
+        TASKBAR_VISIBLE_ID => {
+            let mut settings = load_app_settings().unwrap_or_default();
+            settings.taskbar.enabled = !settings.taskbar.enabled;
+            if crate::auth::save_app_settings(&settings).is_ok() {
+                #[cfg(target_os = "windows")]
+                crate::taskbar_widget::apply_settings(app, &settings);
+                let _ = app.emit(crate::commands::settings::SETTINGS_CHANGED_EVENT, settings);
+            }
+            refresh_menu(app);
+        }
         _ => {
             let Some(account_id) = item_id.strip_prefix(ACCOUNT_ITEM_PREFIX) else {
                 return;
@@ -280,6 +319,8 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             }
 
             refresh_menu(app);
+            #[cfg(target_os = "windows")]
+            crate::taskbar_widget::refresh_active_account();
             let _ = app.emit(ACCOUNTS_CHANGED_EVENT, ());
         }
     }
