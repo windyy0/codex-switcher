@@ -15,6 +15,9 @@ pub mod taskbar_widget;
 pub mod types;
 pub mod web;
 
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+
 use commands::{
     ack_close_behavior_prompt, add_account_from_file, cancel_login, check_codex_processes,
     complete_close_behavior, complete_login, delete_account, export_accounts_full_encrypted_file,
