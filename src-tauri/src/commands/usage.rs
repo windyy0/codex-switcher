@@ -7,6 +7,26 @@ use crate::api::usage::{
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
 use crate::types::{AccountInfo, AuthData, UsageInfo, WarmupSummary};
 use futures::{stream, StreamExt};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex as AsyncMutex;
+
+const ACTIVE_USAGE_CACHE_TTL: Duration = Duration::from_secs(60);
+const INACTIVE_USAGE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Clone)]
+struct CachedUsage {
+    usage: UsageInfo,
+    fetched_at: Instant,
+}
+
+static USAGE_CACHE: LazyLock<Mutex<HashMap<String, CachedUsage>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static USAGE_FETCH_LOCKS: LazyLock<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Fetch usage info for a specific account (shared by the Tauri command and web mode).
 pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
@@ -17,10 +37,72 @@ pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
     get_account_usage(&account).await.map_err(|e| e.to_string())
 }
 
+fn usage_cache_ttl(account_id: &str) -> Duration {
+    let is_active = load_accounts()
+        .ok()
+        .and_then(|store| store.active_account_id)
+        .as_deref()
+        == Some(account_id);
+    if is_active { ACTIVE_USAGE_CACHE_TTL } else { INACTIVE_USAGE_CACHE_TTL }
+}
+
+fn cached_usage(account_id: &str) -> Option<UsageInfo> {
+    let ttl = usage_cache_ttl(account_id);
+    USAGE_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(account_id).cloned())
+        .filter(|cached| cached.fetched_at.elapsed() < ttl)
+        .map(|cached| cached.usage)
+}
+
+fn account_fetch_lock(account_id: &str) -> Arc<AsyncMutex<()>> {
+    let mut locks = USAGE_FETCH_LOCKS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    locks
+        .entry(account_id.to_string())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
+}
+
+/// Return a shared backend snapshot. Active accounts refresh at most once per
+/// minute; inactive accounts refresh at most once every 30 minutes.
+pub async fn fetch_usage_cached(account_id: &str, force_refresh: bool) -> Result<UsageInfo, String> {
+    if !force_refresh {
+        if let Some(usage) = cached_usage(account_id) {
+            return Ok(usage);
+        }
+    }
+
+    let fetch_lock = account_fetch_lock(account_id);
+    let _guard = fetch_lock.lock().await;
+    if !force_refresh {
+        if let Some(usage) = cached_usage(account_id) {
+            return Ok(usage);
+        }
+    }
+
+    let usage = fetch_usage(account_id).await?;
+    if usage.error.is_none() {
+        if let Ok(mut cache) = USAGE_CACHE.lock() {
+            cache.insert(account_id.to_string(), CachedUsage {
+                usage: usage.clone(),
+                fetched_at: Instant::now(),
+            });
+        }
+    }
+    Ok(usage)
+}
+
 /// Get usage info for a specific account
 #[tauri::command]
-pub async fn get_usage(app: tauri::AppHandle, account_id: String) -> Result<UsageInfo, String> {
-    let usage = fetch_usage(&account_id).await?;
+pub async fn get_usage(
+    app: tauri::AppHandle,
+    account_id: String,
+    force_refresh: Option<bool>,
+) -> Result<UsageInfo, String> {
+    let usage = fetch_usage_cached(&account_id, force_refresh.unwrap_or(false)).await?;
 
     // Keep the tray menu/title in sync with whichever UI fetched fresh usage.
     #[cfg(desktop)]

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAccounts } from "./hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
-import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
+import { AccountCard, AddAccountModal, UpdateChecker, requestUpdateCheck } from "./components";
 import { SelectMenu } from "./components/SelectMenu";
 import { WindowsDisplaySettings } from "./components/WindowsDisplaySettings";
 import type { AccountWithUsage, CodexProcessInfo, DockDisplayMode, UsageInfo } from "./types";
@@ -1614,6 +1614,20 @@ function App() {
             </section>
             {isWindows && <WindowsDisplaySettings section="floating" />}
             {isWindows && <WindowsDisplaySettings section="taskbar" />}
+            <section>
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                {t("settings.updateSection")}
+              </h3>
+              <div className="flex items-center justify-between gap-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                <div>
+                  <div className="font-semibold text-gray-900 dark:text-gray-100">{t("settings.checkForUpdates")}</div>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("settings.updateDescription")}</p>
+                </div>
+                <button type="button" onClick={requestUpdateCheck} className="h-10 shrink-0 rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white transition-colors hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200">
+                  {t("settings.checkNow")}
+                </button>
+              </div>
+            </section>
           </div>
         ) : (
           <>

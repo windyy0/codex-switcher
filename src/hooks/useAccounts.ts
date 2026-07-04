@@ -137,6 +137,7 @@ export function useAccounts() {
             try {
               const usage = await invokeBackend<UsageInfo>("get_usage", {
                 accountId: account.id,
+                forceRefresh: Boolean(options?.refreshMetadata),
               });
               usageResults.set(account.id, usage);
             } catch (err) {
@@ -187,7 +188,7 @@ export function useAccounts() {
           a.id === accountId ? { ...a, usageLoading: true } : a
         )
       );
-      const usage = await invokeBackend<UsageInfo>("get_usage", { accountId });
+      const usage = await invokeBackend<UsageInfo>("get_usage", { accountId, forceRefresh: true });
       setAccounts((prev) =>
         prev.map((a) =>
           a.id === accountId ? { ...a, usage, usageLoading: false } : a

@@ -58,7 +58,11 @@
     "field_account": "Account",
     "field_primary_usage": "5h usage",
     "field_primary_reset": "Reset countdown",
-    "field_secondary_usage": "Weekly usage"
+    "field_secondary_usage": "Weekly usage",
+    "updateSection": "Updates",
+    "checkForUpdates": "Check for updates",
+    "updateDescription": "Check GitHub Releases for a newer version of Codex Switcher.",
+    "checkNow": "Check now"
   },
   "window": {
     "minimize": "Minimize",
@@ -254,6 +258,8 @@
     "credits": "Credits: {{balance}}"
   },
   "updates": {
+    "checking": "Checking for updates...",
+    "upToDate": "Codex Switcher is up to date.",
     "available": "Update available: v{{version}}",
     "update": "Update",
     "downloading": "Downloading update...",

@@ -12,7 +12,7 @@ use tokio::runtime::Runtime;
 use crate::commands::{
     add_account_from_auth_json_text, add_account_from_file, cancel_login, check_codex_processes,
     complete_login, delete_account, export_accounts_full_encrypted_bytes,
-    export_accounts_slim_text, fetch_usage, get_account_usage_stats, get_active_account_info,
+    export_accounts_slim_text, fetch_usage_cached, get_account_usage_stats, get_active_account_info,
     get_app_language, get_masked_account_ids, import_accounts_full_encrypted_bytes,
     import_accounts_slim_text, kill_codex_processes, list_accounts, refresh_account_metadata,
     refresh_all_accounts_usage, rename_account, set_masked_account_ids, start_login,
@@ -25,6 +25,15 @@ use crate::types::AppLanguage;
 struct AccountIdArgs {
     #[serde(alias = "account_id")]
     account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    #[serde(default, alias = "force_refresh")]
+    force_refresh: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,8 +154,8 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(add_account_from_auth_json_text(args.name, args.contents).await?)
         }
         "get_usage" => {
-            let args: AccountIdArgs = parse_args(payload)?;
-            to_json(fetch_usage(&args.account_id).await?)
+            let args: UsageArgs = parse_args(payload)?;
+            to_json(fetch_usage_cached(&args.account_id, args.force_refresh).await?)
         }
         "get_account_usage_stats" => {
             let args: AccountIdArgs = parse_args(payload)?;

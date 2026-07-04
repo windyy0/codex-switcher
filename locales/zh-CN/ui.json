@@ -54,7 +54,11 @@
     "field_account": "当前账户",
     "field_primary_usage": "5 小时额度",
     "field_primary_reset": "重置倒计时",
-    "field_secondary_usage": "周额度"
+    "field_secondary_usage": "周额度",
+    "updateSection": "软件更新",
+    "checkForUpdates": "检查更新",
+    "updateDescription": "从 GitHub Releases 检查 Codex Switcher 的新版本。",
+    "checkNow": "立即检查"
   },
   "window": { "minimize": "最小化", "maximize": "最大化", "restore": "还原", "close": "关闭" },
   "header": {
@@ -143,6 +147,7 @@
     "fiveHour": "5 小时限制", "weekly": "每周限制", "credits": "余额：{{balance}}"
   },
   "updates": {
+    "checking": "正在检查更新...", "upToDate": "Codex Switcher 已是最新版本。",
     "available": "发现新版本：v{{version}}", "update": "更新", "downloading": "正在下载更新...", "ready": "更新已就绪，重启后生效。", "failed": "更新失败：{{error}}"
   },
   "tray": {

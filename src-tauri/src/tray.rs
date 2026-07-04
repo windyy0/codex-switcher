@@ -12,10 +12,9 @@ use tauri::{
 use tauri::menu::Submenu;
 
 use crate::{
-    api::usage::get_account_usage,
     auth::{get_account, get_accounts_file, load_accounts, load_app_settings},
     commands::{
-        is_codex_running_switch_block, restore_main_window, switch_account_by_id,
+        fetch_usage_cached, is_codex_running_switch_block, restore_main_window, switch_account_by_id,
         window::TRAY_WINDOW,
     },
     types::{AccountsStore, TrayDisplayMode, UsageInfo},
@@ -556,7 +555,7 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
             .and_then(|id| get_account(&id).ok().flatten());
 
         if let Some(account) = account {
-            match tauri::async_runtime::block_on(get_account_usage(&account)) {
+            match tauri::async_runtime::block_on(fetch_usage_cached(&account.id, false)) {
                 // Keep the last known title on transient fetch errors.
                 Ok(usage) => ingest_usage(&app, vec![usage]),
                 Err(error) => eprintln!("Failed to poll usage for tray title: {error}"),

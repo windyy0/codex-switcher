@@ -5,39 +5,57 @@ import { useTranslation } from "react-i18next";
 
 type UpdateStatus =
   | { kind: "idle" }
-  | { kind: "checking" }
+  | { kind: "checking"; manual: boolean }
+  | { kind: "upToDate" }
   | { kind: "available"; update: Update }
   | { kind: "downloading"; downloaded: number; total: number | null }
   | { kind: "ready" }
   | { kind: "error"; message: string };
+
+const MANUAL_UPDATE_CHECK_EVENT = "codex-switcher:check-for-update";
+
+export function requestUpdateCheck() {
+  window.dispatchEvent(new Event(MANUAL_UPDATE_CHECK_EVENT));
+}
 
 export function UpdateChecker() {
   const { t } = useTranslation();
   const [status, setStatus] = useState<UpdateStatus>({ kind: "idle" });
   const [dismissed, setDismissed] = useState(false);
 
-  const checkForUpdate = useCallback(async () => {
+  const checkForUpdate = useCallback(async (manual = false) => {
     if (!isTauriRuntime()) return;
 
     try {
-      setStatus({ kind: "checking" });
+      setStatus({ kind: "checking", manual });
       setDismissed(false);
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (update) {
         setStatus({ kind: "available", update });
       } else {
-        setStatus({ kind: "idle" });
+        setStatus(manual ? { kind: "upToDate" } : { kind: "idle" });
       }
     } catch (err) {
       console.error("Update check failed:", err);
-      setStatus({ kind: "idle" });
+      if (manual) {
+        const message = err instanceof Error ? err.message : String(err);
+        setStatus({ kind: "error", message });
+      } else {
+        setStatus({ kind: "idle" });
+      }
     }
   }, []);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
-    void checkForUpdate();
+    void checkForUpdate(false);
+  }, [checkForUpdate]);
+
+  useEffect(() => {
+    const handleManualCheck = () => void checkForUpdate(true);
+    window.addEventListener(MANUAL_UPDATE_CHECK_EVENT, handleManualCheck);
+    return () => window.removeEventListener(MANUAL_UPDATE_CHECK_EVENT, handleManualCheck);
   }, [checkForUpdate]);
 
   const handleDownloadAndInstall = async () => {
@@ -87,7 +105,7 @@ export function UpdateChecker() {
     return null;
   }
 
-  if (status.kind === "idle" || status.kind === "checking" || dismissed) {
+  if (status.kind === "idle" || (status.kind === "checking" && !status.manual) || dismissed) {
     return null;
   }
 
@@ -100,6 +118,17 @@ export function UpdateChecker() {
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-md w-full px-4">
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-4">
+        {status.kind === "checking" && (
+          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{t("updates.checking")}</p>
+        )}
+
+        {status.kind === "upToDate" && (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{t("updates.upToDate")}</p>
+            <button onClick={() => setDismissed(true)} className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700">{t("common.dismiss")}</button>
+          </div>
+        )}
+
         {status.kind === "available" && (
           <div className="flex items-start gap-3">
             <div className="flex-1 min-w-0">

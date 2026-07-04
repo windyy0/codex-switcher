@@ -38,9 +38,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0MUQ4MjE5MjMxNkMxRjgKUldUNHdSWWpHWUlkdFBvWENvQ0d4aG1BdVVueUlTWXAxQmprMFBCOEsxT2NmakhQY0FxbjNsb3cK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyNzdCOEM1QjJENUZERTQKUldUay9kV3l4YmgzNHQ2S3ZNSWV2dHJZa1YzMk9WVmVkc2RFU3E1aVFmTitFd2JPWk9TY0NYL0cK",
       "endpoints": [
-        "https://github.com/Lampese/codex-switcher/releases/latest/download/latest.json"
+        "https://github.com/windyy0/codex-switcher/releases/latest/download/latest.json"
       ]
     }
   }
