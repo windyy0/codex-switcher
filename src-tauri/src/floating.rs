@@ -12,7 +12,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     if app.get_webview_window(FLOATING_WINDOW).is_none() {
         let settings = load_app_settings().unwrap_or_default();
         let saved_size = settings.floating.size.unwrap_or((WIDTH as u32, HEIGHT as u32));
-        let mut builder = WebviewWindowBuilder::new(
+        let builder = WebviewWindowBuilder::new(
             app,
             FLOATING_WINDOW,
             WebviewUrl::App("floating.html".into()),
@@ -28,12 +28,14 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .skip_taskbar(true)
         .visible(settings.floating.enabled && settings.floating.visible);
 
-        if let Some((x, y)) = settings.floating.position {
-            builder = builder.position(x as f64, y as f64);
-        }
-
         let window = builder.build()?;
         let _ = window.remove_menu();
+        if let Some((x, y)) = settings.floating.position {
+            // `outer_position` reports physical pixels. Restore with the same
+            // coordinate type so Windows display scaling does not shift the
+            // widget between sessions.
+            let _ = window.set_position(PhysicalPosition::new(x, y));
+        }
         let _ = window.set_ignore_cursor_events(settings.floating.always_on_top);
         create_controls_window(app, &settings)?;
         if let Ok(position) = window.outer_position() { position_controls(app, position); }
