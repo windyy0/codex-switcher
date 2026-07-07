@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   describeFileSource,
   isTauriRuntime,
+  invokeBackend,
   openExternalUrl,
   pickAuthJsonFile,
   type FileSource,
@@ -31,6 +32,8 @@ export function AddAccountModal({
   const [activeTab, setActiveTab] = useState<Tab>("oauth");
   const [name, setName] = useState("");
   const [fileSource, setFileSource] = useState<FileSource | null>(null);
+  const [detectedLocalFile, setDetectedLocalFile] = useState(false);
+  const [localDetectionDone, setLocalDetectionDone] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [oauthPending, setOauthPending] = useState(false);
@@ -39,9 +42,37 @@ export function AddAccountModal({
   const isPrimaryDisabled = loading || (activeTab === "oauth" && oauthPending);
   const tauriRuntime = isTauriRuntime();
 
+  useEffect(() => {
+    if (!isOpen || activeTab !== "import" || !tauriRuntime || localDetectionDone || fileSource) {
+      return;
+    }
+
+    let cancelled = false;
+    setLocalDetectionDone(true);
+    void invokeBackend<string | null>("detect_local_auth_json")
+      .then((path) => {
+        if (path && !cancelled) {
+          setFileSource(path);
+          setDetectedLocalFile(true);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to detect local auth.json:", err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // localDetectionDone intentionally acts as a one-shot guard and is reset
+    // when the modal closes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, fileSource, isOpen, tauriRuntime]);
+
   const resetForm = () => {
     setName("");
     setFileSource(null);
+    setDetectedLocalFile(false);
+    setLocalDetectionDone(false);
     setError(null);
     setLoading(false);
     setOauthPending(false);
@@ -83,7 +114,10 @@ export function AddAccountModal({
   const handleSelectFile = async () => {
     try {
       const selected = await pickAuthJsonFile(t("fileDialog.selectAuth"));
-      if (selected) setFileSource(selected);
+      if (selected) {
+        setFileSource(selected);
+        setDetectedLocalFile(false);
+      }
     } catch (err) {
       console.error("Failed to open file dialog:", err);
     }
@@ -247,6 +281,11 @@ export function AddAccountModal({
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
                 {t("addAccount.importHelp")}
               </p>
+              {detectedLocalFile && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-2">
+                  {t("addAccount.localAuthDetected")}
+                </p>
+              )}
             </div>
           )}
 

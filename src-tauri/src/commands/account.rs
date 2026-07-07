@@ -23,6 +23,7 @@ use sha2::Sha256;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -94,6 +95,25 @@ pub async fn get_active_account_info() -> Result<Option<AccountInfo>, String> {
     } else {
         Ok(None)
     }
+}
+
+/// Locate the auth.json used by the local Codex installation.
+#[tauri::command]
+pub async fn detect_local_auth_json() -> Result<Option<String>, String> {
+    let mut candidates = Vec::new();
+
+    if let Some(codex_home) = std::env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
+        candidates.push(PathBuf::from(codex_home).join("auth.json"));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".codex").join("auth.json"));
+    }
+
+    Ok(candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned()))
 }
 
 /// Add an account from an auth.json file

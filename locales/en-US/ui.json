@@ -208,6 +208,7 @@
     "selectFile": "Select auth.json file",
     "browse": "Browse...",
     "importHelp": "Import credentials from an existing Codex auth.json file",
+    "localAuthDetected": "Local Codex authentication file detected",
     "adding": "Adding...",
     "generateLink": "Generate Login Link"
   },
