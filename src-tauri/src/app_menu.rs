@@ -1,9 +1,12 @@
 //! Native application menu management.
 
 use tauri::{
-    menu::{AboutMetadata, CheckMenuItem, Menu, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, PredefinedMenuItem, Submenu},
     AppHandle, Manager, Runtime,
 };
+
+#[cfg(target_os = "macos")]
+use tauri::menu::AboutMetadata;
 
 #[cfg(target_os = "macos")]
 pub(crate) use crate::types::DockDisplayMode;
@@ -191,8 +194,11 @@ fn apply_dock_display_mode<R: Runtime>(app: &AppHandle<R>, mode: DockDisplayMode
 
 fn build_menu<R: Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> tauri::Result<Menu<R>> {
     let t = |key| crate::i18n::text(&settings.language, key);
+    #[cfg(target_os = "macos")]
     let pkg_info = app.package_info();
+    #[cfg(target_os = "macos")]
     let config = app.config();
+    #[cfg(target_os = "macos")]
     let about_metadata = AboutMetadata {
         name: Some(pkg_info.name.clone()),
         version: Some(pkg_info.version.to_string()),

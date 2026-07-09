@@ -2,20 +2,22 @@
 
 use std::{
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
 };
+
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::{
-    auth::{load_app_settings, save_app_settings},
-    types::{DockDisplayMode, UsageInfo},
-};
+#[cfg(target_os = "macos")]
+use crate::auth::{load_app_settings, save_app_settings};
+use crate::types::{DockDisplayMode, UsageInfo};
 
 /// Label of the borderless tray popup window.
 pub const TRAY_WINDOW: &str = "tray";
 pub const CLOSE_BEHAVIOR_REQUESTED_EVENT: &str = "close-behavior-requested";
 
+#[cfg(target_os = "macos")]
 static CLOSE_BEHAVIOR_PROMPT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CLOSE_BEHAVIOR_PROMPT_ACKED: AtomicU64 = AtomicU64::new(0);
 
