@@ -179,8 +179,14 @@ export function useAccounts() {
   ) => {
     try {
       if (options?.refreshMetadata) {
-        await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
-        await loadAccounts(true);
+        try {
+          await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
+          await loadAccounts(true);
+        } catch (err) {
+          // Subscription metadata is supplemental to the usage display. Keep the
+          // per-account refresh usable when this backend endpoint is unavailable.
+          console.warn("Failed to refresh account metadata; continuing with usage refresh:", err);
+        }
       }
 
       setAccounts((prev) =>
