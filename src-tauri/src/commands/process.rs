@@ -407,9 +407,15 @@ fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
                 // instead of relying on the first token.
                 let first_token = command.split_whitespace().next().unwrap_or("");
                 let is_codex_cli = first_token == "codex" || first_token.ends_with("/codex");
+                let process_name = process_names.get(&pid).map(String::as_str);
+                #[cfg(target_os = "macos")]
+                let bundle_identifier = read_macos_app_bundle_identifier(&command, process_name);
+                #[cfg(not(target_os = "macos"))]
+                let bundle_identifier: Option<String> = None;
                 let is_codex_desktop = is_macos_codex_desktop_process(
                     &command,
-                    process_names.get(&pid).map(String::as_str),
+                    process_name,
+                    bundle_identifier.as_deref(),
                 );
 
                 if !is_codex_cli && !is_codex_desktop {
@@ -471,16 +477,65 @@ fn read_unix_process_names() -> HashMap<u32, String> {
 }
 
 #[cfg(unix)]
-fn is_macos_codex_desktop_process(command: &str, process_name: Option<&str>) -> bool {
-    const EXECUTABLE_SUFFIX: &str = "/Codex.app/Contents/MacOS/Codex";
+fn is_macos_codex_desktop_process(
+    command: &str,
+    process_name: Option<&str>,
+    bundle_identifier: Option<&str>,
+) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    let _ = bundle_identifier;
 
-    process_name == Some("Codex")
-        && command.find(EXECUTABLE_SUFFIX).is_some_and(|index| {
-            command[index + EXECUTABLE_SUFFIX.len()..]
-                .chars()
-                .next()
-                .is_none_or(char::is_whitespace)
-        })
+    const LEGACY_EXECUTABLE_SUFFIX: &str = "/Codex.app/Contents/MacOS/Codex";
+    #[cfg(target_os = "macos")]
+    const CURRENT_EXECUTABLE_SUFFIX: &str = "/ChatGPT.app/Contents/MacOS/ChatGPT";
+    #[cfg(target_os = "macos")]
+    const CODEX_BUNDLE_IDENTIFIER: &str = "com.openai.codex";
+
+    let executable_suffix = match process_name {
+        Some("Codex") => LEGACY_EXECUTABLE_SUFFIX,
+        #[cfg(target_os = "macos")]
+        Some("ChatGPT") if bundle_identifier == Some(CODEX_BUNDLE_IDENTIFIER) => {
+            CURRENT_EXECUTABLE_SUFFIX
+        }
+        _ => return false,
+    };
+
+    command.find(executable_suffix).is_some_and(|index| {
+        command[index + executable_suffix.len()..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_app_bundle_identifier(command: &str, process_name: Option<&str>) -> Option<String> {
+    const APP_BUNDLE_SUFFIX: &str = "/ChatGPT.app";
+    const EXECUTABLE_SUFFIX: &str = "/ChatGPT.app/Contents/MacOS/ChatGPT";
+
+    if process_name != Some("ChatGPT") {
+        return None;
+    }
+
+    let executable_index = command.find(EXECUTABLE_SUFFIX)?;
+    let executable_end = executable_index + EXECUTABLE_SUFFIX.len();
+    if command[executable_end..]
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        return None;
+    }
+
+    let bundle_end = executable_index + APP_BUNDLE_SUFFIX.len();
+    let info_plist = std::path::Path::new(&command[..bundle_end]).join("Contents/Info.plist");
+    let value = plist::Value::from_file(info_plist).ok()?;
+
+    value
+        .as_dictionary()?
+        .get("CFBundleIdentifier")?
+        .as_string()
+        .map(str::to_owned)
 }
 
 #[cfg(windows)]
@@ -622,30 +677,71 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn detects_only_the_macos_codex_desktop_root_process() {
+    fn detects_only_the_legacy_macos_codex_desktop_root_process() {
         assert!(is_macos_codex_desktop_process(
             "/Applications/Codex.app/Contents/MacOS/Codex",
-            Some("Codex")
+            Some("Codex"),
+            None
         ));
         assert!(is_macos_codex_desktop_process(
             "/Users/test/Applications With Spaces/Codex.app/Contents/MacOS/Codex --flag",
-            Some("Codex")
+            Some("Codex"),
+            None
         ));
         assert!(!is_macos_codex_desktop_process(
             "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service) --type=gpu-process",
-            Some("Codex (Service)")
+            Some("Codex (Service)"),
+            None
         ));
         assert!(!is_macos_codex_desktop_process(
             "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --type=renderer",
-            Some("Codex (Renderer)")
+            Some("Codex (Renderer)"),
+            None
         ));
         assert!(!is_macos_codex_desktop_process(
             "/Applications/Codex.app/Contents/Resources/codex app-server",
-            Some("codex")
+            Some("codex"),
+            None
         ));
         assert!(!is_macos_codex_desktop_process(
             "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --app-executable /Applications/Codex.app/Contents/MacOS/Codex --type=renderer",
-            Some("Codex (Renderer)")
+            Some("Codex (Renderer)"),
+            None
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn detects_only_the_current_macos_codex_desktop_root_process() {
+        assert!(is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("ChatGPT"),
+            Some("com.openai.codex")
+        ));
+        assert!(is_macos_codex_desktop_process(
+            "/Users/test/Applications With Spaces/ChatGPT.app/Contents/MacOS/ChatGPT --flag",
+            Some("ChatGPT"),
+            Some("com.openai.codex")
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("ChatGPT"),
+            Some("com.openai.chat")
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("ChatGPT"),
+            None
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("Codex"),
+            Some("com.openai.codex")
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --app-executable /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --type=renderer",
+            Some("Codex (Renderer)"),
+            Some("com.openai.codex")
         ));
     }
 
