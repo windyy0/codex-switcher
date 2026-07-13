@@ -5,13 +5,13 @@ pub mod api;
 pub mod app_menu;
 pub mod auth;
 pub mod commands;
-pub mod i18n;
-#[cfg(desktop)]
-pub mod tray;
 #[cfg(desktop)]
 pub mod floating;
+pub mod i18n;
 #[cfg(target_os = "windows")]
 pub mod taskbar_widget;
+#[cfg(desktop)]
+pub mod tray;
 pub mod types;
 pub mod web;
 
@@ -19,24 +19,38 @@ pub mod web;
 use tauri::Emitter;
 
 use commands::{
-    ack_close_behavior_prompt, add_account_from_file, cancel_login, check_codex_processes,
-    complete_close_behavior, complete_login, delete_account, export_accounts_full_encrypted_file,
-    export_accounts_slim_text, get_account_usage_stats, get_active_account_info, get_app_language,
-    detect_local_auth_json, get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage,
-    hide_tray_window,
+    ack_close_behavior_prompt, add_account_from_file, add_api_account, cancel_login,
+    check_codex_processes, complete_close_behavior, complete_login, delete_account,
+    detect_local_auth_json, export_accounts_full_encrypted_file, export_accounts_slim_text,
+    get_account_usage_stats, get_active_account_info, get_api_account_config, get_app_language,
+    get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage, hide_tray_window,
     import_accounts_full_encrypted_file, import_accounts_slim_text, kill_codex_processes,
     list_accounts, open_main_window, quit_app, refresh_account_metadata,
-    refresh_all_accounts_usage, rename_account, report_usage, set_app_language,
-    set_app_settings, set_dock_display_mode, set_masked_account_ids, start_login, switch_account, warmup_account,
-    warmup_all_accounts,
+    refresh_all_accounts_usage, rename_account, report_usage, set_api_account_config,
+    set_app_language, set_app_settings, set_dock_display_mode, set_masked_account_ids, start_login,
+    switch_account, warmup_account, warmup_all_accounts,
 };
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    {
+        // Must be registered before every other plugin so a second desktop
+        // process cannot race the account/config transaction files.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            commands::restore_main_window(app);
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            {
+                let _transition_guard =
+                    commands::lock_account_transition().map_err(std::io::Error::other)?;
+            }
             #[cfg(desktop)]
             {
                 app.handle()
@@ -77,7 +91,10 @@ pub fn run() {
             get_active_account_info,
             detect_local_auth_json,
             add_account_from_file,
+            add_api_account,
             switch_account,
+            set_api_account_config,
+            get_api_account_config,
             delete_account,
             rename_account,
             export_accounts_slim_text,

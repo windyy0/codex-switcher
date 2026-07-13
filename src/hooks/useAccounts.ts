@@ -88,7 +88,7 @@ export function useAccounts() {
       return accountList;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      return [];
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -242,7 +242,9 @@ export function useAccounts() {
     async (accountId: string) => {
       try {
         await invokeBackend("switch_account", { accountId });
-        await loadAccounts(true); // Preserve usage data
+        void loadAccounts(true).catch((err) => {
+          console.error("Account switched but the list could not be reloaded:", err);
+        });
       } catch (err) {
         throw err;
       }
@@ -254,7 +256,9 @@ export function useAccounts() {
     async (accountId: string) => {
       try {
         await invokeBackend("delete_account", { accountId });
-        await loadAccounts();
+        void loadAccounts().catch((err) => {
+          console.error("Account deleted but the list could not be reloaded:", err);
+        });
       } catch (err) {
         throw err;
       }
@@ -266,7 +270,9 @@ export function useAccounts() {
     async (accountId: string, newName: string) => {
       try {
         await invokeBackend("rename_account", { accountId, newName });
-        await loadAccounts(true); // Preserve usage data
+        void loadAccounts(true).catch((err) => {
+          console.error("Account renamed but the list could not be reloaded:", err);
+        });
       } catch (err) {
         throw err;
       }
@@ -286,11 +292,26 @@ export function useAccounts() {
             contents,
           });
         }
-        const accountList = await loadAccounts();
-        await refreshUsage(accountList);
+        void loadAccounts()
+          .then((accountList) => refreshUsage(accountList))
+          .catch((err) => console.error("Failed to refresh accounts after import:", err));
       } catch (err) {
         throw err;
       }
+    },
+    [loadAccounts, refreshUsage]
+  );
+
+  const addApiAccount = useCallback(
+    async (name: string, apiKey: string, config: string) => {
+      await invokeBackend<AccountInfo>("add_api_account", {
+        name,
+        apiKey,
+        config: config.trim() || null,
+      });
+      void loadAccounts()
+        .then((accountList) => refreshUsage(accountList))
+        .catch((err) => console.error("Failed to refresh accounts after API account creation:", err));
     },
     [loadAccounts, refreshUsage]
   );
@@ -310,8 +331,9 @@ export function useAccounts() {
   const completeOAuthLogin = useCallback(async () => {
     try {
       const account = await invokeBackend<AccountInfo>("complete_login");
-      const accountList = await loadAccounts();
-      await refreshUsage(accountList);
+      void loadAccounts()
+        .then((accountList) => refreshUsage(accountList))
+        .catch((err) => console.error("Failed to refresh accounts after login:", err));
       return account;
     } catch (err) {
       throw err;
@@ -332,8 +354,9 @@ export function useAccounts() {
         const summary = await invokeBackend<ImportAccountsSummary>("import_accounts_slim_text", {
           payload,
         });
-        const accountList = await loadAccounts();
-        await refreshUsage(accountList);
+        void loadAccounts()
+          .then((accountList) => refreshUsage(accountList))
+          .catch((err) => console.error("Slim import succeeded but account refresh failed:", err));
         return summary;
       } catch (err) {
         throw err;
@@ -360,8 +383,9 @@ export function useAccounts() {
           "import_accounts_full_encrypted_file",
           { path }
         );
-        const accountList = await loadAccounts();
-        await refreshUsage(accountList);
+        void loadAccounts()
+          .then((accountList) => refreshUsage(accountList))
+          .catch((err) => console.error("Full import succeeded but account refresh failed:", err));
         return summary;
       } catch (err) {
         throw err;
@@ -396,7 +420,9 @@ export function useAccounts() {
   }, []);
 
   useEffect(() => {
-    loadAccounts().then((accountList) => refreshUsage(accountList));
+    void loadAccounts()
+      .then((accountList) => refreshUsage(accountList))
+      .catch((err) => console.error("Failed to load accounts:", err));
     
     // Auto-refresh usage every 60 seconds (same as official Codex CLI)
     const interval = setInterval(() => {
@@ -413,7 +439,9 @@ export function useAccounts() {
       if (!("__TAURI_INTERNALS__" in window)) return;
       const { listen } = await import("@tauri-apps/api/event");
       unlisten = await listen("accounts-changed", () => {
-        void loadAccounts(true);
+        void loadAccounts(true).catch((err) => {
+          console.error("Failed to reload accounts after change:", err);
+        });
       });
     })();
 
@@ -433,6 +461,7 @@ export function useAccounts() {
     deleteAccount,
     renameAccount,
     importFromFile,
+    addApiAccount,
     exportAccountsSlimText,
     importAccountsSlimText,
     exportAccountsFullEncryptedFile,

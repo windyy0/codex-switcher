@@ -1,5 +1,7 @@
 {
   "common": {
+    "save": "Save",
+    "saving": "Saving...",
     "add": "Add",
     "cancel": "Cancel",
     "close": "Close",
@@ -123,8 +125,8 @@
   "backup": {
     "exportSlim": "Export Slim Text",
     "importSlim": "Import Slim Text",
-    "exportFull": "Export Full Encrypted File",
-    "importFull": "Import Full Encrypted File",
+    "exportFull": "Export Full Protected File",
+    "importFull": "Import Full Protected File",
     "exporting": "Exporting...",
     "importing": "Importing...",
     "slimExported": "Slim text exported ({{count}} accounts).",
@@ -132,7 +134,8 @@
     "pasteFirst": "Please paste the slim text string first.",
     "importSummary": "Imported {{imported}}, skipped {{skipped}} (total {{total}})",
     "slimImportFailed": "Slim import failed",
-    "fullExported": "Full encrypted file exported.",
+    "fullExported": "Full protected file exported.",
+    "fullProtectionWarning": "This portable file contains account secrets. Its built-in protection prevents casual reading but is not secure against someone who has the application. Keep the file private. Continue?",
     "fullExportFailed": "Full export failed",
     "fullImportFailed": "Full import failed",
     "keepExisting": "Existing accounts are kept. Only missing accounts are imported.",
@@ -194,11 +197,13 @@
   "addAccount": {
     "title": "Add Account",
     "chatgptLogin": "ChatGPT Login",
+    "apiKey": "API Key",
     "importFile": "Import File",
     "name": "Account Name",
     "namePlaceholder": "e.g., Work Account",
     "nameRequired": "Please enter an account name",
     "fileRequired": "Please select an auth.json file",
+    "apiKeyRequired": "Please enter an API key",
     "waiting": "Waiting for browser login...",
     "openLink": "Please open the following link in your browser to proceed:",
     "copyLinkManually": "Clipboard unavailable. Copy the link manually.",
@@ -210,7 +215,12 @@
     "importHelp": "Import credentials from an existing Codex auth.json file",
     "localAuthDetected": "Local Codex authentication file detected",
     "adding": "Adding...",
-    "generateLink": "Generate Login Link"
+    "generateLink": "Generate Login Link",
+    "apiKeyLabel": "API Key",
+    "apiConfigLabel": "Account config.toml (optional)",
+    "apiConfigPlaceholder": "model_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nbase_url = \"https://example.com\"",
+    "apiConfigHelp": "When set, this configuration is applied together with this key whenever you switch to this account.",
+    "addApi": "Add API Account"
   },
   "accountCard": {
     "never": "Never",
@@ -241,7 +251,16 @@
     "autoDisable": "Disable auto warm-up for this account",
     "autoEnable": "Enable auto warm-up for this account",
     "refreshUsage": "Refresh usage",
+    "apiConfig": "Edit API config.toml",
     "remove": "Remove account"
+  },
+  "apiConfig": {
+    "title": "API account configuration",
+    "loading": "Loading saved configuration...",
+    "description": "These settings are merged into your normal config.toml whenever you switch to this API account. Unspecified projects and settings are preserved.",
+    "placeholder": "model_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nbase_url = \"https://example.com\"",
+    "existingWarning": "Saving an empty value removes this account's saved config; the existing config.toml on disk is not deleted.",
+    "saved": "API account configuration saved."
   },
   "usage": {
     "now": "now",
@@ -330,8 +349,8 @@
   },
   "fileDialog": {
     "selectAuth": "Select auth.json file",
-    "exportFull": "Export Full Encrypted Account Config",
-    "importFull": "Import Full Encrypted Account Config",
+    "exportFull": "Export Full Protected Account Config",
+    "importFull": "Import Full Protected Account Config",
     "noFile": "No file selected"
   }
 }

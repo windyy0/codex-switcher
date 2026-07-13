@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{mpsc::sync_channel, Arc, Mutex};
 
 use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -10,15 +11,19 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use tokio::runtime::Runtime;
 
 use crate::commands::{
-    add_account_from_auth_json_text, add_account_from_file, cancel_login, check_codex_processes,
-    complete_login, delete_account, export_accounts_full_encrypted_bytes,
-    export_accounts_slim_text, fetch_usage_cached, get_account_usage_stats, get_active_account_info,
-    get_app_language, get_masked_account_ids, import_accounts_full_encrypted_bytes,
-    import_accounts_slim_text, kill_codex_processes, list_accounts, refresh_account_metadata,
-    refresh_all_accounts_usage, rename_account, set_masked_account_ids, start_login,
-    switch_account, warmup_account, warmup_all_accounts,
+    add_account_from_auth_json_text, add_account_from_file, add_api_account, cancel_login,
+    check_codex_processes, complete_login, delete_account, export_accounts_full_encrypted_bytes,
+    export_accounts_slim_text, fetch_usage_cached, get_account_usage_stats,
+    get_active_account_info, get_api_account_config, get_app_language, get_masked_account_ids,
+    import_accounts_full_encrypted_bytes, import_accounts_slim_text, kill_codex_processes,
+    list_accounts, refresh_account_metadata, refresh_all_accounts_usage, rename_account,
+    set_api_account_config, set_masked_account_ids, start_login, switch_account, warmup_account,
+    warmup_all_accounts,
 };
 use crate::types::AppLanguage;
+
+const WEB_WORKER_COUNT: usize = 8;
+const WEB_REQUEST_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +52,14 @@ struct RenameAccountArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ApiAccountConfigArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    config: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LoginArgs {
     #[serde(alias = "account_name")]
     account_name: String,
@@ -66,6 +79,15 @@ struct MaskedIdsArgs {
 struct UploadAuthJsonArgs {
     name: String,
     contents: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddApiAccountArgs {
+    name: String,
+    #[serde(alias = "api_key")]
+    api_key: String,
+    config: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,18 +112,51 @@ pub fn run_lan_server(host: &str, port: u16) -> anyhow::Result<()> {
     let address = format!("{host}:{port}");
     let server = Server::http(&address)
         .map_err(|err| anyhow::anyhow!("Failed to bind HTTP server on {address}: {err}"))?;
-    let runtime = Runtime::new().context("Failed to start async runtime")?;
-    let dist_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("dist");
+    let runtime = Arc::new(Runtime::new().context("Failed to start async runtime")?);
+    let dist_dir = Arc::new(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("dist"),
+    );
 
     println!("Codex Switcher web server listening on http://{address}");
     println!("Serving static files from {}", dist_dir.display());
 
+    // A fixed worker pool lets a cancellation request run while complete_login
+    // is waiting for OAuth, without allowing unbounded OS thread creation.
+    let (sender, receiver) = sync_channel::<Request>(WEB_REQUEST_QUEUE_CAPACITY);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let mut workers = Vec::with_capacity(WEB_WORKER_COUNT);
+    for index in 0..WEB_WORKER_COUNT {
+        let receiver = Arc::clone(&receiver);
+        let runtime = Arc::clone(&runtime);
+        let dist_dir = Arc::clone(&dist_dir);
+        let worker = std::thread::Builder::new()
+            .name(format!("codex-switcher-web-{index}"))
+            .spawn(move || loop {
+                let request = {
+                    let receiver = receiver.lock().unwrap_or_else(|error| error.into_inner());
+                    receiver.recv()
+                };
+                let Ok(request) = request else {
+                    break;
+                };
+                if let Err(error) = handle_request(request, &runtime, &dist_dir) {
+                    eprintln!("[web] request failed: {error:#}");
+                }
+            })
+            .context("Failed to start web request worker")?;
+        workers.push(worker);
+    }
+
     for request in server.incoming_requests() {
-        if let Err(error) = handle_request(request, &runtime, &dist_dir) {
-            eprintln!("[web] request failed: {error:#}");
+        if sender.send(request).is_err() {
+            break;
         }
+    }
+    drop(sender);
+    for worker in workers {
+        let _ = worker.join();
     }
 
     Ok(())
@@ -153,6 +208,10 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: UploadAuthJsonArgs = parse_args(payload)?;
             to_json(add_account_from_auth_json_text(args.name, args.contents).await?)
         }
+        "add_api_account" => {
+            let args: AddApiAccountArgs = parse_args(payload)?;
+            to_json(add_api_account(args.name, args.api_key, args.config).await?)
+        }
         "get_usage" => {
             let args: UsageArgs = parse_args(payload)?;
             to_json(fetch_usage_cached(&args.account_id, args.force_refresh).await?)
@@ -174,6 +233,14 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         "switch_account" => {
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(switch_account(args.account_id).await?)
+        }
+        "get_api_account_config" => {
+            let args: AccountIdArgs = parse_args(payload)?;
+            to_json(get_api_account_config(args.account_id).await?)
+        }
+        "set_api_account_config" => {
+            let args: ApiAccountConfigArgs = parse_args(payload)?;
+            to_json(set_api_account_config(args.account_id, args.config).await?)
         }
         "delete_account" => {
             let args: AccountIdArgs = parse_args(payload)?;
@@ -345,5 +412,22 @@ fn mime_type_for_path(path: &Path) -> &'static str {
         "txt" => "text/plain; charset=utf-8",
         "webp" => "image/webp",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod api_account_args_tests {
+    use super::AddApiAccountArgs;
+
+    #[test]
+    fn accepts_camel_case_api_key_from_web_client() {
+        let args: AddApiAccountArgs = serde_json::from_value(serde_json::json!({
+            "name": "Proxy",
+            "apiKey": "sk-test",
+            "config": null
+        }))
+        .expect("camelCase web payload should deserialize");
+
+        assert_eq!(args.api_key, "sk-test");
     }
 }

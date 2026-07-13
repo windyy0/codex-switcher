@@ -60,7 +60,7 @@ export async function pickAuthJsonFile(title = "Select auth.json file"): Promise
 }
 
 export async function exportFullBackupFile(
-  title = "Export Full Encrypted Account Config"
+  title = "Export Full Protected Account Config"
 ): Promise<boolean> {
   if (isTauriRuntime()) {
     const { save } = await import("@tauri-apps/plugin-dialog");
@@ -85,7 +85,7 @@ export async function exportFullBackupFile(
 }
 
 export async function importFullBackupFile(
-  title = "Import Full Encrypted Account Config"
+  title = "Import Full Protected Account Config"
 ): Promise<ImportAccountsSummary | null> {
   if (isTauriRuntime()) {
     const { open } = await import("@tauri-apps/plugin-dialog");

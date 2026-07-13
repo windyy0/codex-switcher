@@ -5,6 +5,7 @@ use crate::api::usage::{
     warmup_account as send_warmup,
 };
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
+use crate::commands::account::lock_account_transition;
 use crate::types::{AccountInfo, AuthData, UsageInfo, WarmupSummary};
 use futures::{stream, StreamExt};
 use std::{
@@ -43,7 +44,11 @@ fn usage_cache_ttl(account_id: &str) -> Duration {
         .and_then(|store| store.active_account_id)
         .as_deref()
         == Some(account_id);
-    if is_active { ACTIVE_USAGE_CACHE_TTL } else { INACTIVE_USAGE_CACHE_TTL }
+    if is_active {
+        ACTIVE_USAGE_CACHE_TTL
+    } else {
+        INACTIVE_USAGE_CACHE_TTL
+    }
 }
 
 fn cached_usage(account_id: &str) -> Option<UsageInfo> {
@@ -68,7 +73,10 @@ fn account_fetch_lock(account_id: &str) -> Arc<AsyncMutex<()>> {
 
 /// Return a shared backend snapshot. Active accounts refresh at most once per
 /// minute; inactive accounts refresh at most once every 30 minutes.
-pub async fn fetch_usage_cached(account_id: &str, force_refresh: bool) -> Result<UsageInfo, String> {
+pub async fn fetch_usage_cached(
+    account_id: &str,
+    force_refresh: bool,
+) -> Result<UsageInfo, String> {
     if !force_refresh {
         if let Some(usage) = cached_usage(account_id) {
             return Ok(usage);
@@ -86,10 +94,13 @@ pub async fn fetch_usage_cached(account_id: &str, force_refresh: bool) -> Result
     let usage = fetch_usage(account_id).await?;
     if usage.error.is_none() {
         if let Ok(mut cache) = USAGE_CACHE.lock() {
-            cache.insert(account_id.to_string(), CachedUsage {
-                usage: usage.clone(),
-                fetched_at: Instant::now(),
-            });
+            cache.insert(
+                account_id.to_string(),
+                CachedUsage {
+                    usage: usage.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
         }
     }
     Ok(usage)
@@ -132,6 +143,7 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
                 .await
                 .map_err(|e| e.to_string())?;
 
+            let _transition_guard = lock_account_transition()?;
             update_account_metadata(
                 &account_id,
                 None,
@@ -169,10 +181,15 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let total_accounts = store.accounts.len();
+    let eligible_accounts = store
+        .accounts
+        .into_iter()
+        .filter(|account| matches!(account.auth_data, AuthData::ChatGPT { .. }))
+        .collect::<Vec<_>>();
+    let total_accounts = eligible_accounts.len();
     let concurrency = total_accounts.min(10).max(1);
 
-    let results: Vec<(String, bool)> = stream::iter(store.accounts.into_iter())
+    let results: Vec<(String, bool)> = stream::iter(eligible_accounts)
         .map(|account| async move {
             let account_id = account.id.clone();
             let failed = send_warmup(&account).await.is_err();

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   describeFileSource,
@@ -13,17 +13,19 @@ interface AddAccountModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImportFile: (source: FileSource, name: string) => Promise<void>;
+  onAddApi: (name: string, apiKey: string, config: string) => Promise<void>;
   onStartOAuth: (name: string) => Promise<{ auth_url: string }>;
   onCompleteOAuth: () => Promise<unknown>;
   onCancelOAuth: () => Promise<void>;
 }
 
-type Tab = "oauth" | "import";
+type Tab = "oauth" | "import" | "api";
 
 export function AddAccountModal({
   isOpen,
   onClose,
   onImportFile,
+  onAddApi,
   onStartOAuth,
   onCompleteOAuth,
   onCancelOAuth,
@@ -32,6 +34,8 @@ export function AddAccountModal({
   const [activeTab, setActiveTab] = useState<Tab>("oauth");
   const [name, setName] = useState("");
   const [fileSource, setFileSource] = useState<FileSource | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [apiConfig, setApiConfig] = useState("");
   const [detectedLocalFile, setDetectedLocalFile] = useState(false);
   const [localDetectionDone, setLocalDetectionDone] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -39,7 +43,10 @@ export function AddAccountModal({
   const [oauthPending, setOauthPending] = useState(false);
   const [authUrl, setAuthUrl] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
+  const oauthAttemptRef = useRef(0);
   const isPrimaryDisabled = loading || (activeTab === "oauth" && oauthPending);
+  const nonOauthSubmissionPending = loading && activeTab !== "oauth";
+  const submissionInputLocked = loading || oauthPending;
   const tauriRuntime = isTauriRuntime();
 
   useEffect(() => {
@@ -71,6 +78,8 @@ export function AddAccountModal({
   const resetForm = () => {
     setName("");
     setFileSource(null);
+    setApiKey("");
+    setApiConfig("");
     setDetectedLocalFile(false);
     setLocalDetectionDone(false);
     setError(null);
@@ -80,8 +89,12 @@ export function AddAccountModal({
   };
 
   const handleClose = () => {
-    if (oauthPending) {
-      onCancelOAuth();
+    if (nonOauthSubmissionPending) return;
+    oauthAttemptRef.current += 1;
+    if (activeTab === "oauth" && (oauthPending || loading)) {
+      void onCancelOAuth().catch((err) => {
+        console.error("Failed to cancel login:", err);
+      });
     }
     resetForm();
     onClose();
@@ -93,18 +106,27 @@ export function AddAccountModal({
       return;
     }
 
+    const attemptId = ++oauthAttemptRef.current;
     try {
       setLoading(true);
       setError(null);
       const info = await onStartOAuth(name.trim());
+      if (oauthAttemptRef.current !== attemptId) {
+        void onCancelOAuth().catch((err) => {
+          console.error("Failed to cancel stale login:", err);
+        });
+        return;
+      }
       setAuthUrl(info.auth_url);
       setOauthPending(true);
       setLoading(false);
 
       // Wait for completion
       await onCompleteOAuth();
+      if (oauthAttemptRef.current !== attemptId) return;
       handleClose();
     } catch (err) {
+      if (oauthAttemptRef.current !== attemptId) return;
       setError(err instanceof Error ? err.message : String(err));
       setLoading(false);
       setOauthPending(false);
@@ -112,6 +134,7 @@ export function AddAccountModal({
   };
 
   const handleSelectFile = async () => {
+    if (submissionInputLocked) return;
     try {
       const selected = await pickAuthJsonFile(t("fileDialog.selectAuth"));
       if (selected) {
@@ -133,12 +156,40 @@ export function AddAccountModal({
       return;
     }
 
+    const attemptId = ++oauthAttemptRef.current;
     try {
       setLoading(true);
       setError(null);
       await onImportFile(fileSource, name.trim());
-      handleClose();
+      if (oauthAttemptRef.current !== attemptId) return;
+      resetForm();
+      onClose();
     } catch (err) {
+      if (oauthAttemptRef.current !== attemptId) return;
+      setError(err instanceof Error ? err.message : String(err));
+      setLoading(false);
+    }
+  };
+
+  const handleAddApi = async () => {
+    if (!name.trim()) {
+      setError(t("addAccount.nameRequired"));
+      return;
+    }
+    if (!apiKey.trim()) {
+      setError(t("addAccount.apiKeyRequired"));
+      return;
+    }
+    const attemptId = ++oauthAttemptRef.current;
+    try {
+      setLoading(true);
+      setError(null);
+      await onAddApi(name.trim(), apiKey.trim(), apiConfig);
+      if (oauthAttemptRef.current !== attemptId) return;
+      resetForm();
+      onClose();
+    } catch (err) {
+      if (oauthAttemptRef.current !== attemptId) return;
       setError(err instanceof Error ? err.message : String(err));
       setLoading(false);
     }
@@ -154,7 +205,8 @@ export function AddAccountModal({
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t("addAccount.title")}</h2>
           <button
             onClick={handleClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            disabled={nonOauthSubmissionPending}
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors disabled:opacity-50"
           >
             ✕
           </button>
@@ -162,26 +214,29 @@ export function AddAccountModal({
 
         {/* Tabs */}
         <div className="flex border-b border-gray-100 dark:border-gray-800">
-          {(["oauth", "import"] as Tab[]).map((tab) => (
+          {(["oauth", "import", "api"] as Tab[]).map((tab) => (
             <button
               key={tab}
+              disabled={nonOauthSubmissionPending}
               onClick={() => {
-                if (tab === "import" && oauthPending) {
+                if (tab !== "oauth" && activeTab === "oauth" && (oauthPending || loading)) {
+                  oauthAttemptRef.current += 1;
                   void onCancelOAuth().catch((err) => {
                     console.error("Failed to cancel login:", err);
                   });
                   setOauthPending(false);
                   setLoading(false);
+                  setAuthUrl("");
                 }
                 setActiveTab(tab);
                 setError(null);
               }}
-              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === tab
+              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors disabled:opacity-50 ${activeTab === tab
                   ? "text-gray-900 dark:text-gray-100 border-b-2 border-gray-900 dark:border-gray-100 -mb-px"
                   : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                 }`}
             >
-              {tab === "oauth" ? t("addAccount.chatgptLogin") : t("addAccount.importFile")}
+              {tab === "oauth" ? t("addAccount.chatgptLogin") : tab === "api" ? t("addAccount.apiKey") : t("addAccount.importFile")}
             </button>
           ))}
         </div>
@@ -197,8 +252,9 @@ export function AddAccountModal({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              disabled={submissionInputLocked}
               placeholder={t("addAccount.namePlaceholder")}
-              className="w-full px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500 transition-colors"
+              className="w-full px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500 transition-colors disabled:opacity-60"
             />
           </div>
 
@@ -273,7 +329,8 @@ export function AddAccountModal({
                 </div>
                 <button
                   onClick={handleSelectFile}
-                  className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 transition-colors whitespace-nowrap"
+                  disabled={submissionInputLocked}
+                  className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 transition-colors whitespace-nowrap disabled:opacity-60"
                 >
                   {t("addAccount.browse")}
                 </button>
@@ -289,6 +346,34 @@ export function AddAccountModal({
             </div>
           )}
 
+          {activeTab === "api" && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("addAccount.apiKeyLabel")}</label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  disabled={submissionInputLocked}
+                  placeholder="sk-..."
+                  className="w-full px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:border-gray-400 disabled:opacity-60"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t("addAccount.apiConfigLabel")}</label>
+                <textarea
+                  value={apiConfig}
+                  onChange={(event) => setApiConfig(event.target.value)}
+                  disabled={submissionInputLocked}
+                  placeholder={t("addAccount.apiConfigPlaceholder")}
+                  spellCheck={false}
+                  className="w-full h-36 font-mono text-xs p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:border-gray-400 disabled:opacity-60"
+                />
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">{t("addAccount.apiConfigHelp")}</p>
+              </div>
+            </div>
+          )}
+
           {/* Error */}
           {error && (
             <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg text-red-600 dark:text-red-300 text-sm">
@@ -301,20 +386,23 @@ export function AddAccountModal({
         <div className="flex gap-3 p-5 border-t border-gray-100 dark:border-gray-800">
           <button
             onClick={handleClose}
-            className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-colors"
+            disabled={nonOauthSubmissionPending}
+            className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-colors disabled:opacity-50"
           >
             {t("common.cancel")}
           </button>
           <button
-            onClick={activeTab === "oauth" ? handleOAuthLogin : handleImportFile}
+            onClick={activeTab === "oauth" ? handleOAuthLogin : activeTab === "api" ? handleAddApi : handleImportFile}
             disabled={isPrimaryDisabled}
             className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors disabled:opacity-50"
           >
             {loading
               ? t("addAccount.adding")
-              : activeTab === "oauth"
-                ? t("addAccount.generateLink")
-                : t("common.import")}
+                : activeTab === "oauth"
+                  ? t("addAccount.generateLink")
+                  : activeTab === "api"
+                    ? t("addAccount.addApi")
+                    : t("common.import")}
           </button>
         </div>
       </div>

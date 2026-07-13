@@ -1,5 +1,7 @@
 {
   "common": {
+    "save": "保存",
+    "saving": "保存中...",
     "add": "添加",
     "cancel": "取消",
     "close": "关闭",
@@ -96,10 +98,10 @@
     "timedSummary": "定时预热：成功 {{warmed}} 个，失败 {{failed}} 个"
   },
   "backup": {
-    "exportSlim": "导出精简文本", "importSlim": "导入精简文本", "exportFull": "导出完整加密文件", "importFull": "导入完整加密文件",
+    "exportSlim": "导出精简文本", "importSlim": "导入精简文本", "exportFull": "导出完整保护文件", "importFull": "导入完整保护文件",
     "exporting": "正在导出...", "importing": "正在导入...", "slimExported": "已导出精简文本（{{count}} 个账户）。", "slimExportFailed": "精简文本导出失败",
     "pasteFirst": "请先粘贴精简文本。", "importSummary": "已导入 {{imported}}，跳过 {{skipped}}（共 {{total}}）", "slimImportFailed": "精简文本导入失败",
-    "fullExported": "完整加密文件已导出。", "fullExportFailed": "完整文件导出失败", "fullImportFailed": "完整文件导入失败",
+    "fullExported": "完整保护文件已导出。", "fullProtectionWarning": "此便携文件包含账号密钥。内置保护只能防止直接查看，无法防御持有本应用程序的人，请务必妥善保管。是否继续？", "fullExportFailed": "完整文件导出失败", "fullImportFailed": "完整文件导入失败",
     "keepExisting": "现有账户会被保留，只导入缺少的账户。", "secretWarning": "精简文本包含账户密钥，请妥善保管。",
     "generating": "正在生成...", "exportPlaceholder": "导出的文本将显示在这里", "importPlaceholder": "在此粘贴配置文本",
     "clipboardUnavailable": "剪贴板不可用，请手动复制。", "copyString": "复制文本", "importMissing": "导入缺少的账户"
@@ -125,12 +127,13 @@
     "changeLater": "之后可随时在托盘弹窗中更改。", "dontAsk": "不再询问", "keepDock": "保留在程序坞", "menuBarOnly": "仅菜单栏"
   },
   "addAccount": {
-    "title": "添加账户", "chatgptLogin": "ChatGPT 登录", "importFile": "导入文件", "name": "账户名称", "namePlaceholder": "例如：工作账户",
-    "nameRequired": "请输入账户名称", "fileRequired": "请选择 auth.json 文件", "waiting": "正在等待浏览器登录...",
+    "title": "添加账户", "chatgptLogin": "ChatGPT 登录", "apiKey": "API Key", "importFile": "导入文件", "name": "账户名称", "namePlaceholder": "例如：工作账户",
+    "nameRequired": "请输入账户名称", "fileRequired": "请选择 auth.json 文件", "apiKeyRequired": "请输入 API Key", "waiting": "正在等待浏览器登录...",
     "openLink": "请在浏览器中打开以下链接继续：", "copyLinkManually": "剪贴板不可用，请手动复制链接。", "copied": "已复制！",
     "remoteOauthWarning": "OAuth 登录必须在运行本程序的同一台主机上完成，因为回调会跳转到 localhost。",
     "loginHelp": "点击下方按钮生成登录链接，然后在浏览器中打开并完成认证。", "selectFile": "选择 auth.json 文件", "browse": "浏览...",
-    "importHelp": "从已有的 Codex auth.json 文件导入凭据", "localAuthDetected": "已检测到本地 Codex 认证文件", "adding": "正在添加...", "generateLink": "生成登录链接"
+    "importHelp": "从已有的 Codex auth.json 文件导入凭据", "localAuthDetected": "已检测到本地 Codex 认证文件", "adding": "正在添加...", "generateLink": "生成登录链接",
+    "apiKeyLabel": "API Key", "apiConfigLabel": "该账户的 config.toml（可选）", "apiConfigPlaceholder": "model_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nbase_url = \"https://example.com\"", "apiConfigHelp": "配置后，每次切换到这个账户都会连同 API Key 一起应用。", "addApi": "添加 API 账户"
   },
   "accountCard": {
     "never": "从未", "justNow": "刚刚", "secondsAgo": "{{count}} 秒前", "minutesAgo": "{{count}} 分钟前", "hoursAgo": "{{count}} 小时前",
@@ -139,7 +142,15 @@
     "rename": "点击重命名", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "active": "当前使用",
     "closeProcesses": "请先关闭所有 Codex 进程", "switching": "切换中...", "codexRunning": "Codex 正在运行", "switch": "切换",
     "warmupSending": "正在发送预热请求...", "warmupSend": "发送最小预热请求", "autoAll": "已为所有账户开启自动预热",
-    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "refreshUsage": "刷新用量", "remove": "移除账户"
+    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "移除账户"
+  },
+  "apiConfig": {
+    "title": "API 账户配置",
+    "loading": "正在加载已保存的配置...",
+    "description": "每次切换到此 API 账户时，这些设置会合并进原有 config.toml；未指定的项目和其他配置会保留。",
+    "placeholder": "model_provider = \"OpenAI\"\n\n[model_providers.OpenAI]\nbase_url = \"https://example.com\"",
+    "existingWarning": "保存空内容会移除此账户保存的配置；不会删除磁盘上已有的 config.toml。",
+    "saved": "API 账户配置已保存。"
   },
   "usage": {
     "now": "现在", "seconds": "{{count}} 秒", "minutes": "{{count}} 分钟", "hours": "{{count}} 小时", "hoursMinutes": "{{hours}} 小时 {{minutes}} 分钟", "days": "{{count}} 天",
@@ -170,6 +181,6 @@
     "mostUsedPlugins": "最常用插件", "runs": "运行 {{count}} 次", "runs_other": "运行 {{count}} 次"
   },
   "fileDialog": {
-    "selectAuth": "选择 auth.json 文件", "exportFull": "导出完整加密账户配置", "importFull": "导入完整加密账户配置", "noFile": "未选择文件"
+    "selectAuth": "选择 auth.json 文件", "exportFull": "导出完整保护账户配置", "importFull": "导入完整保护账户配置", "noFile": "未选择文件"
   }
 }

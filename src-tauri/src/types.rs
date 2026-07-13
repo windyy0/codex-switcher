@@ -14,9 +14,73 @@ pub struct AccountsStore {
     pub accounts: Vec<StoredAccount>,
     /// Currently active account ID
     pub active_account_id: Option<String>,
+    /// Canonical CODEX_HOME whose derived auth/config files correspond to the
+    /// global active account. Missing means a legacy store not yet migrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_account_home: Option<String>,
     /// Set of account IDs that are masked (hidden)
     #[serde(default)]
     pub masked_account_ids: Vec<String>,
+    /// Whether the user's normal config.toml has been captured before entering
+    /// an API account with a per-account configuration.
+    #[serde(default)]
+    pub codex_config_backup_captured: bool,
+    /// Legacy inline backup retained only to migrate development builds that
+    /// stored the original config in accounts.json. New backups live in
+    /// ~/.codex-switcher/config.toml.backup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_config_backup: Option<String>,
+    #[serde(default)]
+    pub codex_config_backup_existed: bool,
+    /// Canonical CODEX_HOME path associated with the active backup session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_config_backup_home: Option<String>,
+    /// Exact API overlay currently applied to config.toml. This lets switching
+    /// remove only managed keys while preserving unrelated changes made by Codex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_config_active_overlay: Option<String>,
+    /// Crash-recovery journal for the cross-file config.toml/store commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_config_transition: Option<CodexConfigTransitionJournal>,
+    /// Active credentials were durably rotated in the account store but the
+    /// derived auth.json may still need to be rebuilt after a crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_auth_sync_account_id: Option<String>,
+    /// Canonical CODEX_HOME that must receive the pending auth.json update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_auth_sync_home: Option<String>,
+    /// Digests of refresh tokens that were already exchanged. Keeping a small
+    /// durable history prevents another process from consuming an old rotating
+    /// token after it waited for credentials.lock.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumed_refresh_token_hashes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexConfigTransitionJournal {
+    pub home: String,
+    /// Account that the complete auth/config transition intends to activate.
+    /// None means remove managed credentials after deleting the last account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_account_id: Option<String>,
+    /// Complete target record and optional deletion are part of the same
+    /// durable transaction as auth/config/active-account changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_account: Option<StoredAccount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remove_account_id: Option<String>,
+    pub before_config_hash: Option<String>,
+    pub after_config_hash: Option<String>,
+    pub before: CodexConfigManagedState,
+    pub after: CodexConfigManagedState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexConfigManagedState {
+    pub backup_captured: bool,
+    pub backup_existed: bool,
+    pub backup_home: Option<String>,
+    pub active_overlay: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +245,17 @@ impl Default for AccountsStore {
             version: 1,
             accounts: Vec::new(),
             active_account_id: None,
+            active_account_home: None,
             masked_account_ids: Vec::new(),
+            codex_config_backup_captured: false,
+            codex_config_backup: None,
+            codex_config_backup_existed: false,
+            codex_config_backup_home: None,
+            codex_config_active_overlay: None,
+            codex_config_transition: None,
+            pending_auth_sync_account_id: None,
+            pending_auth_sync_home: None,
+            consumed_refresh_token_hashes: Vec::new(),
         }
     }
 }
@@ -204,6 +278,10 @@ pub struct StoredAccount {
     pub auth_mode: AuthMode,
     /// Authentication credentials
     pub auth_data: AuthData,
+    /// Optional per-account Codex configuration.  API providers commonly need
+    /// their own base URL, model, or wire protocol in addition to the key.
+    #[serde(default)]
+    pub codex_config: Option<String>,
     /// When the account was added
     pub created_at: DateTime<Utc>,
     /// Last time this account was used
@@ -221,6 +299,7 @@ impl StoredAccount {
             subscription_expires_at: None,
             auth_mode: AuthMode::ApiKey,
             auth_data: AuthData::ApiKey { key: api_key },
+            codex_config: None,
             created_at: Utc::now(),
             last_used_at: None,
         }
@@ -250,6 +329,7 @@ impl StoredAccount {
                 refresh_token,
                 account_id,
             },
+            codex_config: None,
             created_at: Utc::now(),
             last_used_at: None,
         }
@@ -380,6 +460,7 @@ pub struct AccountInfo {
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
+    pub has_codex_config: bool,
 }
 
 impl AccountInfo {
@@ -404,6 +485,7 @@ impl AccountInfo {
             is_active: active_id == Some(&account.id),
             created_at: account.created_at,
             last_used_at: account.last_used_at,
+            has_codex_config: account.codex_config.is_some(),
         }
     }
 }

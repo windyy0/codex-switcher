@@ -1,8 +1,6 @@
 //! Window and tray popup management commands.
 
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_os = "macos")]
 use std::time::Duration;
@@ -85,6 +83,8 @@ pub fn schedule_close_behavior_prompt_fallback<R: Runtime>(app: AppHandle<R>, re
 
 /// Bring the main window to the foreground and hide the tray popup.
 pub fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
     if let Some(tray) = app.get_webview_window(TRAY_WINDOW) {
         let _ = tray.hide();
     }

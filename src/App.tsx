@@ -177,6 +177,7 @@ function App() {
     deleteAccount,
     renameAccount,
     importFromFile,
+    addApiAccount,
     exportAccountsSlimText,
     importAccountsSlimText,
     startOAuthLogin,
@@ -188,12 +189,20 @@ function App() {
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [apiConfigAccount, setApiConfigAccount] = useState<AccountWithUsage | null>(null);
+  const [apiConfigText, setApiConfigText] = useState("");
+  const [apiConfigError, setApiConfigError] = useState<string | null>(null);
+  const [isLoadingApiConfig, setIsLoadingApiConfig] = useState(false);
+  const [hasLoadedApiConfig, setHasLoadedApiConfig] = useState(false);
+  const [isSavingApiConfig, setIsSavingApiConfig] = useState(false);
+  const apiConfigRequestRef = useRef(0);
   const [configModalMode, setConfigModalMode] = useState<"slim_export" | "slim_import">(
     "slim_export"
   );
   const [configPayload, setConfigPayload] = useState("");
   const [configModalError, setConfigModalError] = useState<string | null>(null);
   const [configCopied, setConfigCopied] = useState(false);
+  const configModalRequestRef = useRef(0);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [processInfo, setProcessInfo] = useState<CodexProcessInfo | null>(null);
@@ -527,6 +536,61 @@ function App() {
     }
   };
 
+  const openApiConfig = async (account: AccountWithUsage) => {
+    const requestId = ++apiConfigRequestRef.current;
+    setApiConfigAccount(account);
+    setApiConfigText("");
+    setApiConfigError(null);
+    setIsLoadingApiConfig(true);
+    setHasLoadedApiConfig(false);
+    try {
+      const config = await invokeBackend<string | null>("get_api_account_config", {
+        accountId: account.id,
+      });
+      if (apiConfigRequestRef.current === requestId) {
+        setApiConfigText(config ?? "");
+        setHasLoadedApiConfig(true);
+      }
+    } catch (err) {
+      if (apiConfigRequestRef.current === requestId) {
+        setApiConfigError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (apiConfigRequestRef.current === requestId) {
+        setIsLoadingApiConfig(false);
+      }
+    }
+  };
+
+  const closeApiConfig = () => {
+    apiConfigRequestRef.current += 1;
+    setApiConfigAccount(null);
+    setIsLoadingApiConfig(false);
+    setHasLoadedApiConfig(false);
+    setApiConfigError(null);
+  };
+
+  const saveApiConfig = async () => {
+    if (!apiConfigAccount || isLoadingApiConfig || !hasLoadedApiConfig || isSavingApiConfig) return;
+    try {
+      setIsSavingApiConfig(true);
+      setApiConfigError(null);
+      await invokeBackend("set_api_account_config", {
+        accountId: apiConfigAccount.id,
+        config: apiConfigText.trim() || null,
+      });
+      closeApiConfig();
+      showWarmupToast(t("apiConfig.saved"));
+      void loadAccounts(true).catch((err) => {
+        console.error("API config was saved but accounts could not be reloaded:", err);
+      });
+    } catch (err) {
+      setApiConfigError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsSavingApiConfig(false);
+    }
+  };
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     setRefreshSuccess(false);
@@ -736,7 +800,7 @@ function App() {
 
       const warmedAt = Date.now();
       const failedAccountIds = new Set(summary.failed_account_ids);
-      accounts.forEach((account) => {
+      accounts.filter((account) => account.auth_mode !== "api_key").forEach((account) => {
         if (!failedAccountIds.has(account.id)) {
           markSuccessfulWarmup(account.id, warmedAt);
         }
@@ -1011,6 +1075,8 @@ function App() {
   }, []);
 
   const handleExportSlimText = async () => {
+    if (isExportingSlim || isImportingSlim) return;
+    const requestId = ++configModalRequestRef.current;
     setConfigModalMode("slim_export");
     setConfigModalError(null);
     setConfigPayload("");
@@ -1020,19 +1086,25 @@ function App() {
     try {
       setIsExportingSlim(true);
       const payload = await exportAccountsSlimText();
+      if (configModalRequestRef.current !== requestId) return;
       setConfigPayload(payload);
       showWarmupToast(t("backup.slimExported", { count: accounts.length }));
     } catch (err) {
+      if (configModalRequestRef.current !== requestId) return;
       console.error("Failed to export slim text:", err);
       const message = err instanceof Error ? err.message : String(err);
       setConfigModalError(message);
       showWarmupToast(t("backup.slimExportFailed"), true);
     } finally {
-      setIsExportingSlim(false);
+      if (configModalRequestRef.current === requestId) {
+        setIsExportingSlim(false);
+      }
     }
   };
 
   const openImportSlimTextModal = () => {
+    if (isExportingSlim || isImportingSlim) return;
+    configModalRequestRef.current += 1;
     setConfigModalMode("slim_import");
     setConfigModalError(null);
     setConfigPayload("");
@@ -1046,10 +1118,12 @@ function App() {
       return;
     }
 
+    const requestId = ++configModalRequestRef.current;
     try {
       setIsImportingSlim(true);
       setConfigModalError(null);
       const summary = await importAccountsSlimText(configPayload);
+      if (configModalRequestRef.current !== requestId) return;
       setMaskedAccounts(new Set());
       setIsConfigModalOpen(false);
       showWarmupToast(
@@ -1060,16 +1134,26 @@ function App() {
         })
       );
     } catch (err) {
+      if (configModalRequestRef.current !== requestId) return;
       console.error("Failed to import slim text:", err);
       const message = err instanceof Error ? err.message : String(err);
       setConfigModalError(message);
       showWarmupToast(t("backup.slimImportFailed"), true);
     } finally {
-      setIsImportingSlim(false);
+      if (configModalRequestRef.current === requestId) {
+        setIsImportingSlim(false);
+      }
     }
   };
 
+  const closeConfigModal = () => {
+    if (isExportingSlim || isImportingSlim) return;
+    configModalRequestRef.current += 1;
+    setIsConfigModalOpen(false);
+  };
+
   const handleExportFullFile = async () => {
+    if (!window.confirm(t("backup.fullProtectionWarning"))) return;
     try {
       setIsExportingFull(true);
       const exported = await exportFullBackupFile(t("fileDialog.exportFull"));
@@ -1084,12 +1168,21 @@ function App() {
   };
 
   const handleImportFullFile = async () => {
+    if (!window.confirm(t("backup.fullProtectionWarning"))) return;
     try {
       setIsImportingFull(true);
       const summary = await importFullBackupFile(t("fileDialog.importFull"));
       if (!summary) return;
-      const accountList = await loadAccounts();
-      await refreshUsage(accountList);
+      try {
+        const accountList = await loadAccounts();
+        void refreshUsage(accountList).catch((err) => {
+          console.error("Full import succeeded but usage refresh failed:", err);
+        });
+      } catch (err) {
+        // The backup is already imported. Keep the success result and let the
+        // normal account error UI report that only the follow-up reload failed.
+        console.error("Full import succeeded but account reload failed:", err);
+      }
       const maskedIds = await loadMaskedAccountIds();
       setMaskedAccounts(new Set(maskedIds));
       showWarmupToast(
@@ -1456,7 +1549,7 @@ function App() {
                         setIsActionsMenuOpen(false);
                         void handleExportFullFile();
                       }}
-                      disabled={isExportingFull}
+                      disabled={isExportingFull || isImportingFull}
                       className="w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-white dark:hover:bg-neutral-900"
                     >
                       {isExportingFull ? t("backup.exporting") : t("backup.exportFull")}
@@ -1466,7 +1559,7 @@ function App() {
                         setIsActionsMenuOpen(false);
                         void handleImportFullFile();
                       }}
-                      disabled={isImportingFull}
+                      disabled={isImportingFull || isExportingFull}
                       className="w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-white dark:hover:bg-neutral-900"
                     >
                       {isImportingFull ? t("backup.importing") : t("backup.importFull")}
@@ -1678,6 +1771,7 @@ function App() {
                     refreshSingleUsage(activeAccount.id, { refreshMetadata: true })
                   }
                   onRename={(newName) => renameAccount(activeAccount.id, newName)}
+                  onEditApiConfig={() => void openApiConfig(activeAccount)}
                   switching={switchingId === activeAccount.id}
                   switchDisabled={hasRunningProcesses ?? false}
                   warmingUp={
@@ -1752,6 +1846,7 @@ function App() {
                         refreshSingleUsage(account.id, { refreshMetadata: true })
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
+                      onEditApiConfig={() => void openApiConfig(account)}
                       switching={switchingId === account.id}
                       switchDisabled={hasRunningProcesses ?? false}
                       warmingUp={
@@ -1914,10 +2009,45 @@ function App() {
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         onImportFile={importFromFile}
+        onAddApi={addApiAccount}
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}
         onCancelOAuth={cancelOAuthLogin}
       />
+
+      {apiConfigAccount && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl w-full max-w-2xl mx-4 shadow-xl">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t("apiConfig.title")}</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{apiConfigAccount.name}</p>
+              </div>
+              <button onClick={closeApiConfig} disabled={isSavingApiConfig} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50">✕</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-gray-500 dark:text-gray-400">{t("apiConfig.description")}</p>
+              <textarea
+                value={apiConfigText}
+                onChange={(event) => setApiConfigText(event.target.value)}
+                disabled={isLoadingApiConfig || isSavingApiConfig}
+                placeholder={t("apiConfig.placeholder")}
+                spellCheck={false}
+                className="w-full h-72 font-mono text-sm p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              />
+              {isLoadingApiConfig && <p className="text-xs text-gray-500 dark:text-gray-400">{t("apiConfig.loading")}</p>}
+              {hasLoadedApiConfig && apiConfigAccount.has_codex_config && !apiConfigText && (
+                <p className="text-xs text-amber-700 dark:text-amber-300">{t("apiConfig.existingWarning")}</p>
+              )}
+              {apiConfigError && <p className="text-sm text-red-600 dark:text-red-300">{apiConfigError}</p>}
+            </div>
+            <div className="flex gap-3 p-5 border-t border-gray-100 dark:border-gray-800">
+              <button onClick={closeApiConfig} disabled={isSavingApiConfig} className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 disabled:opacity-50">{t("common.cancel")}</button>
+              <button onClick={() => void saveApiConfig()} disabled={isLoadingApiConfig || !hasLoadedApiConfig || isSavingApiConfig} className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 disabled:opacity-50">{isSavingApiConfig ? t("common.saving") : t("common.save")}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Import/Export Config Modal */}
       {isConfigModalOpen && (
@@ -1928,8 +2058,9 @@ function App() {
                 {configModalMode === "slim_export" ? t("backup.exportSlim") : t("backup.importSlim")}
               </h2>
               <button
-                onClick={() => setIsConfigModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                onClick={closeConfigModal}
+                disabled={isExportingSlim || isImportingSlim}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors disabled:opacity-50"
               >
                 ✕
               </button>
@@ -1948,6 +2079,7 @@ function App() {
                 value={configPayload}
                 onChange={(e) => setConfigPayload(e.target.value)}
                 readOnly={configModalMode === "slim_export"}
+                disabled={isExportingSlim || isImportingSlim}
                 placeholder={
                   configModalMode === "slim_export"
                     ? isExportingSlim
@@ -1965,8 +2097,9 @@ function App() {
             </div>
             <div className="flex gap-3 p-5 border-t border-gray-100 dark:border-gray-800">
               <button
-                onClick={() => setIsConfigModalOpen(false)}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-colors"
+                onClick={closeConfigModal}
+                disabled={isExportingSlim || isImportingSlim}
+                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-colors disabled:opacity-50"
               >
                 {t("common.close")}
               </button>

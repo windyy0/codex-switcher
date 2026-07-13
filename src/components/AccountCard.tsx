@@ -15,6 +15,7 @@ interface AccountCardProps {
   onDelete: () => void;
   onRefresh: () => Promise<unknown>;
   onRename: (newName: string) => Promise<void>;
+  onEditApiConfig?: () => void;
   switching?: boolean;
   switchDisabled?: boolean;
   warmingUp?: boolean;
@@ -168,6 +169,7 @@ export function AccountCard({
   onDelete,
   onRefresh,
   onRename,
+  onEditApiConfig,
   switching,
   switchDisabled,
   warmingUp,
@@ -248,6 +250,7 @@ export function AccountCard({
   const planKey = account.plan_type?.toLowerCase() || "api_key";
   const planColorClass = planColors[planKey] || planColors.free;
   const showSubscriptionStatus = account.auth_mode === "chat_g_p_t";
+  const supportsWarmup = account.auth_mode !== "api_key";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at, t, locale);
   const resetCreditsCount = formatResetCreditsCount(resetCredits, t);
   const compactResetCredits = !account.is_active;
@@ -450,7 +453,7 @@ export function AccountCard({
             {switching ? t("accountCard.switching") : switchDisabled ? t("accountCard.codexRunning") : t("accountCard.switch")}
           </button>
         )}
-        <button
+        {supportsWarmup && <button
           onClick={() => {
             void onWarmup();
           }}
@@ -463,8 +466,8 @@ export function AccountCard({
           data-tooltip={warmingUp ? t("accountCard.warmupSending") : t("accountCard.warmupSend")}
         >
           ⚡
-        </button>
-        {onToggleAutoWarmup && (
+        </button>}
+        {supportsWarmup && onToggleAutoWarmup && (
           <button
             onClick={onToggleAutoWarmup}
             disabled={autoWarmupManagedByAll}
@@ -496,6 +499,15 @@ export function AccountCard({
         >
           <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
         </button>
+        {account.auth_mode === "api_key" && onEditApiConfig && (
+          <button
+            onClick={onEditApiConfig}
+            className="px-3 py-2 text-sm rounded-lg bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 transition-colors"
+            data-tooltip={t("accountCard.apiConfig")}
+          >
+            ⚙
+          </button>
+        )}
         <button
           onClick={onDelete}
           className="px-3 py-2 text-sm rounded-lg bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-300 transition-colors"

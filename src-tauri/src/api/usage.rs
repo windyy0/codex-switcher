@@ -21,7 +21,6 @@ const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
 const CHATGPT_ACCOUNTS_CHECK_API: &str =
     "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
 const CHATGPT_CODEX_RESPONSES_API: &str = "https://chatgpt.com/backend-api/codex/responses";
-const OPENAI_API: &str = "https://api.openai.com/v1";
 const CODEX_USER_AGENT: &str = "codex-cli/1.0.0";
 
 #[derive(Debug, Clone)]
@@ -90,7 +89,10 @@ pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
     );
 
     match &account.auth_data {
-        AuthData::ApiKey { key } => warmup_with_api_key(key).await,
+        // An API-key account without a per-account fragment can still inherit a
+        // third-party provider from the user's normal config.toml. We cannot
+        // prove the key belongs to OpenAI here, so never send it to a fixed host.
+        AuthData::ApiKey { .. } => anyhow::bail!("Warm-up is disabled for API key accounts"),
         AuthData::ChatGPT { .. } => warmup_with_chatgpt_auth(account).await,
     }
 }
@@ -220,31 +222,6 @@ async fn warmup_with_chatgpt_auth(account: &StoredAccount) -> Result<()> {
 
     let body = response.text().await.unwrap_or_default();
     log_warmup_response("ChatGPT", &body, true);
-
-    Ok(())
-}
-
-async fn warmup_with_api_key(api_key: &str) -> Result<()> {
-    let client = reqwest::Client::new();
-    let payload = build_warmup_payload(false, true);
-    let response = client
-        .post(format!("{OPENAI_API}/responses"))
-        .header(USER_AGENT, CODEX_USER_AGENT)
-        .header(AUTHORIZATION, format!("Bearer {api_key}"))
-        .json(&payload)
-        .send()
-        .await
-        .context("Failed to send API key warm-up request")?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        println!("[Warmup] API key warm-up error response: {body}");
-        anyhow::bail!("API key warm-up failed with status {status}");
-    }
-
-    let body = response.text().await.unwrap_or_default();
-    log_warmup_response("API key", &body, false);
 
     Ok(())
 }
