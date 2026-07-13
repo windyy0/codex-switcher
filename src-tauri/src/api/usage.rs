@@ -468,10 +468,18 @@ fn extract_credits(credits: Option<CreditStatusDetails>) -> Option<CreditStatusD
 
 /// Refresh all account usage
 pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
-    println!("[Usage] Refreshing usage for {} accounts", accounts.len());
+    let eligible_accounts = accounts
+        .iter()
+        .filter(|account| matches!(account.auth_data, AuthData::ChatGPT { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    println!(
+        "[Usage] Refreshing usage for {} ChatGPT accounts",
+        eligible_accounts.len()
+    );
 
-    let concurrency = accounts.len().min(10).max(1);
-    let results: Vec<UsageInfo> = stream::iter(accounts.iter().cloned())
+    let concurrency = eligible_accounts.len().min(10).max(1);
+    let results: Vec<UsageInfo> = stream::iter(eligible_accounts)
         .map(|account| async move {
             match get_account_usage(&account).await {
                 Ok(info) => info,

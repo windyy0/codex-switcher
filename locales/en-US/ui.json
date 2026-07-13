@@ -240,6 +240,7 @@
     "showInfo": "Show info",
     "hideInfo": "Hide info",
     "lastUpdated": "Last updated: {{time}}",
+    "apiUsageManagedExternally": "API key accounts do not expose standard usage or subscription details. Check your provider dashboard instead.",
     "active": "Active",
     "closeProcesses": "Close all Codex processes first",
     "switching": "Switching...",
@@ -275,7 +276,8 @@
     "noData": "No rate limit data",
     "fiveHour": "5h Limit",
     "weekly": "Weekly Limit",
-    "credits": "Credits: {{balance}}"
+    "credits": "Credits: {{balance}}",
+    "apiKeyManagedExternally": "API usage is managed by your provider"
   },
   "updates": {
     "checking": "Checking for updates...",
@@ -294,6 +296,7 @@
     "resetsNow": "Resets now",
     "resetsIn": "Resets in {{time}}",
     "usageUnavailable": "Usage unavailable",
+    "apiKeyManagedExternally": "Check your provider dashboard for API usage",
     "today": "today",
     "lastSevenDays": "last 7 days",
     "dock": "Dock",

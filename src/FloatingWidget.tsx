@@ -49,6 +49,11 @@ export default function FloatingWidget() {
       const active = await invokeBackend<AccountInfo | null>("get_active_account_info");
       setAccount(active);
       if (!active) { setUsage(null); setOffline(false); return; }
+      if (active.auth_mode === "api_key") {
+        setUsage(null);
+        setOffline(false);
+        return;
+      }
       const next = await invokeBackend<UsageInfo>("get_usage", { accountId: active.id });
       setOffline(Boolean(next.error));
       if (!next.error) setUsage(next);
@@ -77,16 +82,20 @@ export default function FloatingWidget() {
     0.5,
     Math.min(2.5, Math.min((viewport.width - 16) / 284, (viewport.height - 16) / 168))
   );
-  const planKey = account?.plan_type?.toLowerCase() ?? "free";
+  const isApiKeyAccount = account?.auth_mode === "api_key";
+  const planKey = account?.plan_type?.toLowerCase() ?? (isApiKeyAccount ? "api_key" : "free");
   const planDisplay = account?.plan_type
     ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
-    : null;
+    : account?.auth_mode === "api_key"
+      ? t("accountCard.apiKey")
+      : null;
   const planColors: Record<string, string> = {
     pro: "bg-indigo-400/15 text-indigo-300 border-indigo-400/30",
     plus: "bg-emerald-400/15 text-emerald-300 border-emerald-400/30",
     team: "bg-blue-400/15 text-blue-300 border-blue-400/30",
     enterprise: "bg-amber-400/15 text-amber-300 border-amber-400/30",
     free: "bg-slate-400/15 text-slate-300 border-slate-400/30",
+    api_key: "bg-orange-400/15 text-orange-300 border-orange-400/30",
   };
   const hide = async () => {
     if (settings) {
@@ -120,16 +129,22 @@ export default function FloatingWidget() {
         <div className="origin-top-left" style={{ width: `${100 / contentScale}%`, height: `${100 / contentScale}%`, transform: `scale(${contentScale})` }}>
         <div className="mb-3 flex h-7 items-center justify-between pr-16">
           <div className="flex min-w-0 items-center gap-2">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${offline ? "bg-rose-400" : "bg-emerald-400"}`} />
+            <span className={`h-2 w-2 shrink-0 rounded-full ${isApiKeyAccount ? "bg-orange-400" : offline ? "bg-rose-400" : "bg-emerald-400"}`} />
             {fields.has("account") && <span className="truncate text-sm font-semibold">{account?.name ?? "Codex"}</span>}
             {fields.has("account") && planDisplay && <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${planColors[planKey] ?? planColors.free}`}>{planDisplay}</span>}
           </div>
         </div>
-        <div className="space-y-3">
-          {fields.has("primary_usage") && <UsageRow label={t("usage.fiveHour")} value={primary} />}
-          {fields.has("secondary_usage") && <UsageRow label={t("usage.weekly")} value={secondary} />}
-          {fields.has("primary_reset") && <div className="text-right text-[11px] text-slate-400">{t("usage.resets", { time: resetLabel(usage?.primary_resets_at ?? null) })}</div>}
-        </div>
+        {isApiKeyAccount ? (
+          <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[11px] leading-4 text-slate-400">
+            {t("usage.apiKeyManagedExternally")}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {fields.has("primary_usage") && <UsageRow label={t("usage.fiveHour")} value={primary} />}
+            {fields.has("secondary_usage") && <UsageRow label={t("usage.weekly")} value={secondary} />}
+            {fields.has("primary_reset") && <div className="text-right text-[11px] text-slate-400">{t("usage.resets", { time: resetLabel(usage?.primary_resets_at ?? null) })}</div>}
+          </div>
+        )}
         </div>
         {!settings?.floating.always_on_top && <div className="absolute right-4 top-3 flex items-center gap-1">
           <button aria-label={t("settings.pinAndPassThrough")} onMouseEnter={() => setControlTooltip("pin")} onMouseLeave={() => setControlTooltip(null)} className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white" onClick={() => void pin()}><PinIcon /></button>

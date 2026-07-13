@@ -882,9 +882,15 @@ function App() {
   );
 
   const timedWarmupTargetsReady = useMemo(
-    () =>
-      accounts.length > 0 &&
-      accounts.every((account) => account.usage && !account.usageLoading),
+    () => {
+      const eligibleAccounts = accounts.filter(
+        (account) => account.auth_mode === "chat_g_p_t"
+      );
+      return (
+        eligibleAccounts.length > 0 &&
+        eligibleAccounts.every((account) => account.usage && !account.usageLoading)
+      );
+    },
     [accounts]
   );
 
@@ -1466,7 +1472,7 @@ function App() {
               </button>
               <button
                 onClick={handleRefresh}
-                disabled={isRefreshing}
+                disabled={isRefreshing || !accounts.some((account) => account.auth_mode === "chat_g_p_t")}
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
                 data-tooltip={isRefreshing ? t("header.refreshingAll") : t("header.refreshAll")}
               >

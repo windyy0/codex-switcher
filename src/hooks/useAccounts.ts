@@ -78,8 +78,10 @@ export function useAccounts() {
           );
           return accountList.map((a) => ({
             ...a,
-            usage: usageMap.get(a.id)?.usage,
-            usageLoading: usageMap.get(a.id)?.usageLoading,
+            usage: a.auth_mode === "chat_g_p_t" ? usageMap.get(a.id)?.usage : undefined,
+            usageLoading: a.auth_mode === "chat_g_p_t"
+              ? usageMap.get(a.id)?.usageLoading
+              : false,
           }));
         });
       } else {
@@ -105,6 +107,23 @@ export function useAccounts() {
           return;
         }
 
+        // API key providers do not expose the ChatGPT subscription/rate-limit
+        // endpoints. Keep them out of both metadata and usage polling instead
+        // of manufacturing a recurring "usage unavailable" failure.
+        list = list.filter((account) => account.auth_mode === "chat_g_p_t");
+
+        setAccounts((prev) =>
+          prev.map((account) =>
+            account.auth_mode === "api_key"
+              ? { ...account, usage: undefined, usageLoading: false }
+              : account
+          )
+        );
+
+        if (list.length === 0) {
+          return;
+        }
+
         if (options?.refreshMetadata) {
           await runWithConcurrency(
             list,
@@ -116,7 +135,9 @@ export function useAccounts() {
             maxConcurrentUsageRequests
           );
 
-          list = await loadAccounts(true);
+          list = (await loadAccounts(true)).filter(
+            (account) => account.auth_mode === "chat_g_p_t"
+          );
         }
 
         const accountIds = list.map((account) => account.id);
@@ -177,6 +198,18 @@ export function useAccounts() {
     accountId: string,
     options?: { refreshMetadata?: boolean }
   ) => {
+    const account = accountsRef.current.find((candidate) => candidate.id === accountId);
+    if (account?.auth_mode === "api_key") {
+      setAccounts((prev) =>
+        prev.map((candidate) =>
+          candidate.id === accountId
+            ? { ...candidate, usage: undefined, usageLoading: false }
+            : candidate
+        )
+      );
+      throw new Error("Usage refresh is not supported for API key accounts");
+    }
+
     try {
       if (options?.refreshMetadata) {
         try {

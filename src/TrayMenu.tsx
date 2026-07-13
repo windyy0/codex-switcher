@@ -104,7 +104,9 @@ function retainUsageForAccounts(
 ): Record<string, UsageInfo> {
   return Object.fromEntries(
     accounts.flatMap((account) =>
-      usageById[account.id] ? [[account.id, usageById[account.id]]] : []
+      account.auth_mode === "chat_g_p_t" && usageById[account.id]
+        ? [[account.id, usageById[account.id]]]
+        : []
     )
   );
 }
@@ -123,8 +125,10 @@ function TrayMenu() {
 
   // Fetch each account's rate-limit usage in parallel; rows fill in as they land.
   const loadUsage = useCallback(async (list: AccountInfo[]) => {
+    const eligibleAccounts = list.filter((account) => account.auth_mode === "chat_g_p_t");
+    setUsageById((prev) => retainUsageForAccounts(prev, list));
     await Promise.all(
-      list.map(async (account) => {
+      eligibleAccounts.map(async (account) => {
         try {
           const usage = await invokeBackend<UsageInfo>("get_usage", {
             accountId: account.id,
@@ -151,11 +155,19 @@ function TrayMenu() {
         }
       })
     );
-  }, []);
+  }, [t]);
 
   const loadActiveStats = useCallback(async (list: AccountInfo[]) => {
     const active = list.find((account) => account.is_active);
     if (!active) return;
+    if (active.auth_mode === "api_key") {
+      setStatsById((prev) => {
+        const next = { ...prev };
+        delete next[active.id];
+        return next;
+      });
+      return;
+    }
 
     try {
       const stats = await invokeBackend<AccountUsageStats>("get_account_usage_stats", {
@@ -193,7 +205,7 @@ function TrayMenu() {
         },
       }));
     }
-  }, []);
+  }, [t]);
 
   const loadDockDisplayMode = useCallback(async () => {
     try {
@@ -364,7 +376,7 @@ function TrayMenu() {
         </button>
         <button
           onClick={() => void handleRefresh()}
-          disabled={refreshing}
+          disabled={refreshing || !accounts.some((account) => account.auth_mode === "chat_g_p_t")}
           data-tooltip={t("accountCard.refreshUsage")}
           className="flex h-6 w-6 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
         >
@@ -385,7 +397,8 @@ function TrayMenu() {
           </div>
         ) : (
           accounts.map((account) => {
-            const plan = formatPlan(account.plan_type);
+            const isApiKeyAccount = account.auth_mode === "api_key";
+            const plan = formatPlan(account.plan_type) ?? (isApiKeyAccount ? t("accountCard.apiKey") : null);
             const usage = usageById[account.id];
             const stats = statsById[account.id];
             const windows =
@@ -480,6 +493,10 @@ function TrayMenu() {
                           </span>
                         );
                       })}
+                    </span>
+                  ) : isApiKeyAccount ? (
+                    <span className="block text-xs leading-4 text-gray-500 dark:text-gray-400">
+                      {t("tray.apiKeyManagedExternally")}
                     </span>
                   ) : usage?.error ? (
                     <span className="block truncate text-xs text-red-500 dark:text-red-400">

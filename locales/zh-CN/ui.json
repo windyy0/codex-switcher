@@ -139,7 +139,7 @@
     "never": "从未", "justNow": "刚刚", "secondsAgo": "{{count}} 秒前", "minutesAgo": "{{count}} 分钟前", "hoursAgo": "{{count}} 小时前",
     "expiryUnavailable": "到期时间不可用", "expired": "已于 {{date}} 到期", "until": "有效期至 {{date}}", "resetCount": "{{count}} 次重置",
     "resetCount_other": "{{count}} 次重置", "closest": "最近 {{date}}", "closestExpires": "最近一批于 {{date}} 到期", "apiKey": "API 密钥",
-    "rename": "点击重命名", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "active": "当前使用",
+    "rename": "点击重命名", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "apiUsageManagedExternally": "API Key 账户不提供统一的用量和订阅信息，请前往对应服务商后台查看。", "active": "当前使用",
     "closeProcesses": "请先关闭所有 Codex 进程", "switching": "切换中...", "codexRunning": "Codex 正在运行", "switch": "切换",
     "warmupSending": "正在发送预热请求...", "warmupSend": "发送最小预热请求", "autoAll": "已为所有账户开启自动预热",
     "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "移除账户"
@@ -155,7 +155,7 @@
   "usage": {
     "now": "现在", "seconds": "{{count}} 秒", "minutes": "{{count}} 分钟", "hours": "{{count}} 小时", "hoursMinutes": "{{hours}} 小时 {{minutes}} 分钟", "days": "{{count}} 天",
     "left": "剩余 {{percent}}%", "resets": "{{time}} 后重置", "fetching": "正在获取用量...", "noData": "没有速率限制数据",
-    "fiveHour": "5 小时限制", "weekly": "每周限制", "credits": "余额：{{balance}}"
+    "fiveHour": "5 小时限制", "weekly": "每周限制", "credits": "余额：{{balance}}", "apiKeyManagedExternally": "API 用量由服务商管理"
   },
   "updates": {
     "checking": "正在检查更新...", "upToDate": "Codex Switcher 已是最新版本。",
@@ -163,7 +163,7 @@
   },
   "tray": {
     "loading": "正在加载...", "noAccounts": "尚未配置账户", "session": "会话", "weekly": "每周",
-    "resetsNow": "现在重置", "resetsIn": "{{time}} 后重置", "usageUnavailable": "用量不可用",
+    "resetsNow": "现在重置", "resetsIn": "{{time}} 后重置", "usageUnavailable": "用量不可用", "apiKeyManagedExternally": "API 用量请前往服务商后台查看",
     "today": "今天", "lastSevenDays": "最近 7 天", "dock": "程序坞", "show": "显示", "menuBar": "菜单栏",
     "openApp": "打开 Codex Switcher", "quit": "退出"
   },

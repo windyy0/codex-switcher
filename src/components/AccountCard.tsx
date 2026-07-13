@@ -247,10 +247,10 @@ export function AccountCard({
     api_key: "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700",
   };
 
-  const planKey = account.plan_type?.toLowerCase() || "api_key";
+  const isApiKeyAccount = account.auth_mode === "api_key";
+  const planKey = account.plan_type?.toLowerCase() || (isApiKeyAccount ? "api_key" : "free");
   const planColorClass = planColors[planKey] || planColors.free;
-  const showSubscriptionStatus = account.auth_mode === "chat_g_p_t";
-  const supportsWarmup = account.auth_mode !== "api_key";
+  const supportsWarmup = !isApiKeyAccount;
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at, t, locale);
   const resetCreditsCount = formatResetCreditsCount(resetCredits, t);
   const compactResetCredits = !account.is_active;
@@ -286,6 +286,11 @@ export function AccountCard({
 
   useEffect(() => {
     setResetCredits(null);
+
+    if (account.auth_mode !== "chat_g_p_t") {
+      resetRequestSeq.current += 1;
+      return;
+    }
 
     void loadResetCredits();
     const timer = window.setInterval(() => {
@@ -406,29 +411,35 @@ export function AccountCard({
         </div>
       </div>
 
-      {/* Usage */}
-      <div className="mb-3">
-        <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
-      </div>
-
-      {/* Last refresh time */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-3">
-        <div className="text-gray-400 dark:text-gray-500">
-          {t("accountCard.lastUpdated", { time: formatLastRefresh(lastRefresh, t, locale) })}
+      {isApiKeyAccount ? (
+        <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50/80 px-3 py-2.5 text-xs leading-5 text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
+          {t("accountCard.apiUsageManagedExternally")}
         </div>
-        {showSubscriptionStatus && (
+      ) : (
+        <>
+          {/* Usage */}
+          <div className="mb-3">
+            <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
+          </div>
+
+          {/* Last refresh time */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-3">
+            <div className="text-gray-400 dark:text-gray-500">
+              {t("accountCard.lastUpdated", { time: formatLastRefresh(lastRefresh, t, locale) })}
+            </div>
           <div className={`text-right ${subscriptionStatus.className}`}>
             {subscriptionStatus.label}
           </div>
-        )}
-      </div>
+          </div>
 
-      <AccountUsageStats
-        accountId={account.id}
-        enabled={account.auth_mode === "chat_g_p_t"}
-        defaultOpen={account.is_active}
-        onStatsLoaded={handleStatsLoaded}
-      />
+          <AccountUsageStats
+            accountId={account.id}
+            enabled
+            defaultOpen={account.is_active}
+            onStatsLoaded={handleStatsLoaded}
+          />
+        </>
+      )}
 
       {/* Actions */}
       <div className="flex gap-2 mt-3">
@@ -487,7 +498,7 @@ export function AccountCard({
             {autoWarmupLabel ?? (autoWarmupEnabled ? t("warmup.autoOn") : t("warmup.autoOff"))}
           </button>
         )}
-        <button
+        {!isApiKeyAccount && <button
           onClick={handleRefresh}
           disabled={isRefreshing}
           className={`px-3 py-2 text-sm rounded-lg transition-colors ${
@@ -498,8 +509,8 @@ export function AccountCard({
           data-tooltip={t("accountCard.refreshUsage")}
         >
           <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
-        </button>
-        {account.auth_mode === "api_key" && onEditApiConfig && (
+        </button>}
+        {isApiKeyAccount && onEditApiConfig && (
           <button
             onClick={onEditApiConfig}
             className="px-3 py-2 text-sm rounded-lg bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 transition-colors"

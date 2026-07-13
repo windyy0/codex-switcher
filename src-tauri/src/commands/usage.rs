@@ -164,7 +164,12 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
 #[tauri::command]
 pub async fn refresh_all_accounts_usage() -> Result<Vec<UsageInfo>, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
-    Ok(refresh_all_usage(&store.accounts).await)
+    let eligible_accounts = store
+        .accounts
+        .into_iter()
+        .filter(|account| matches!(account.auth_data, AuthData::ChatGPT { .. }))
+        .collect::<Vec<_>>();
+    Ok(refresh_all_usage(&eligible_accounts).await)
 }
 
 /// Send a minimal warm-up request for one account

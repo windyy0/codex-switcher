@@ -17,7 +17,7 @@ use crate::{
         fetch_usage_cached, is_codex_running_switch_block, restore_main_window, switch_account_by_id,
         window::TRAY_WINDOW,
     },
-    types::{AccountsStore, TrayDisplayMode, UsageInfo},
+    types::{AccountsStore, AuthMode, TrayDisplayMode, UsageInfo},
 };
 
 static TRAY_USAGE: LazyLock<Mutex<HashMap<String, UsageInfo>>> =
@@ -554,7 +554,7 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
             .and_then(|store| store.active_account_id)
             .and_then(|id| get_account(&id).ok().flatten());
 
-        if let Some(account) = account {
+        if let Some(account) = account.filter(|account| account.auth_mode == AuthMode::ChatGPT) {
             match tauri::async_runtime::block_on(fetch_usage_cached(&account.id, false)) {
                 // Keep the last known title on transient fetch errors.
                 Ok(usage) => ingest_usage(&app, vec![usage]),
