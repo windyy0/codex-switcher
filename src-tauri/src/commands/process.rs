@@ -1018,8 +1018,8 @@ mod tests {
 
     #[test]
     fn windows_codex_shortcut_filter_excludes_switcher() {
-        assert!(super::is_windows_codex_shortcut_name("ChatGPT.lnk"));
-        assert!(super::is_windows_codex_shortcut_name("OpenAI ChatGPT.lnk"));
+        assert!(!super::is_windows_codex_shortcut_name("ChatGPT.lnk"));
+        assert!(!super::is_windows_codex_shortcut_name("OpenAI ChatGPT.lnk"));
         assert!(super::is_windows_codex_shortcut_name("Codex.lnk"));
         assert!(super::is_windows_codex_shortcut_name("OpenAI Codex.lnk"));
         assert!(!super::is_windows_codex_shortcut_name("Codex Switcher.lnk"));
@@ -1034,8 +1034,8 @@ mod tests {
             name: "ChatGPT.exe".to_string(),
             process_id: 1,
             parent_process_id: 0,
-            command_line: r#""C:\Program Files\WindowsApps\OpenAI.Codex_1\app\ChatGPT.exe""#
-                .to_string(),
+            command_line: r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#.to_string(),
+            executable_path: r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe".to_string(),
             main_window_title: "ChatGPT".to_string(),
         };
         assert!(super::is_windows_codex_root_process(&root));
@@ -1148,10 +1148,6 @@ fn find_windows_codex_app() -> Option<std::path::PathBuf> {
     for key in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
         if let Some(base) = std::env::var_os(key) {
             let base = std::path::PathBuf::from(base);
-            candidates.push(base.join("Programs").join("ChatGPT").join("ChatGPT.exe"));
-            candidates.push(base.join("Programs").join("chatgpt").join("ChatGPT.exe"));
-            candidates.push(base.join("ChatGPT").join("ChatGPT.exe"));
-            candidates.push(base.join("OpenAI").join("ChatGPT").join("ChatGPT.exe"));
             candidates.push(base.join("Programs").join("Codex").join("Codex.exe"));
             candidates.push(base.join("Programs").join("codex").join("Codex.exe"));
             candidates.push(base.join("Codex").join("Codex.exe"));
@@ -1226,15 +1222,14 @@ $app = Get-StartApps |
     $appId = [string]$_.AppID
     $text = ($name + ' ' + $appId).ToLowerInvariant()
     $isSwitcher = $text.Contains('codex switcher') -or $text.Contains('codex-switcher') -or $text.Contains('lampese')
-    $isCodex = $name -eq 'ChatGPT' -or $name -eq 'Codex' -or $name -eq 'OpenAI Codex' -or $appId -like 'OpenAI.Codex*' -or ($text.Contains('openai') -and ($text.Contains('codex') -or $text.Contains('chatgpt')))
+    $isCodex = $name -eq 'Codex' -or $name -eq 'OpenAI Codex' -or $appId -like 'OpenAI.Codex*' -or ($text.Contains('openai') -and $text.Contains('codex'))
     $isCodex -and -not $isSwitcher
   } |
   Sort-Object @{ Expression = {
-    if ($_.Name -eq 'ChatGPT') { 0 }
+    if ($_.AppID -like 'OpenAI.Codex*') { 0 }
     elseif ($_.Name -eq 'Codex') { 1 }
     elseif ($_.Name -eq 'OpenAI Codex') { 2 }
-    elseif ($_.AppID -like 'OpenAI.Codex*') { 3 }
-    else { 4 }
+    else { 3 }
   } }, Name |
   Select-Object -First 1
 if ($null -eq $app) { exit 1 }
@@ -1258,8 +1253,6 @@ fn find_windows_codex_shortcuts() -> Vec<std::path::PathBuf> {
                 .join("Windows")
                 .join("Start Menu")
                 .join("Programs");
-            candidates.push(programs.join("ChatGPT.lnk"));
-            candidates.push(programs.join("OpenAI").join("ChatGPT.lnk"));
             candidates.push(programs.join("Codex.lnk"));
             candidates.push(programs.join("OpenAI").join("Codex.lnk"));
             collect_windows_codex_shortcuts(&programs, &mut candidates, 0);
@@ -1354,9 +1347,7 @@ fn collect_windows_codex_apps(
             continue;
         };
 
-        if file_name.eq_ignore_ascii_case("Codex.exe")
-            || file_name.eq_ignore_ascii_case("ChatGPT.exe")
-        {
+        if file_name.eq_ignore_ascii_case("Codex.exe") {
             candidates.push(path);
         }
     }
@@ -1415,11 +1406,7 @@ fn is_windows_codex_shortcut_name(file_name: &str) -> bool {
         return false;
     }
 
-    shortcut_name == "chatgpt"
-        || shortcut_name.starts_with("chatgpt ")
-        || shortcut_name.contains("openai chatgpt")
-        || (shortcut_name.contains("openai") && shortcut_name.contains("chatgpt"))
-        || shortcut_name == "codex"
+    shortcut_name == "codex"
         || shortcut_name.starts_with("codex ")
         || shortcut_name.contains("openai codex")
         || (shortcut_name.contains("openai") && shortcut_name.contains("codex"))
