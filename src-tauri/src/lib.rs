@@ -131,6 +131,7 @@ pub fn run() {
             set_app_language,
             get_app_settings,
             set_app_settings,
+            floating::set_floating_bounds,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

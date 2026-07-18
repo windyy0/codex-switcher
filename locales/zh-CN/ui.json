@@ -46,10 +46,14 @@
     "floatingWindow": "显示悬浮窗",
     "floatingDescription": "在工作区上方常驻显示现代额度卡片。",
     "clickThrough": "点击穿透",
+    "clickThroughDescription": "鼠标操作会穿过悬浮窗并作用于下方窗口；开启后会退出紧凑模式，可通过悬浮控制条关闭。",
+    "enableClickThrough": "开启点击穿透",
+    "disableClickThrough": "关闭点击穿透",
     "alwaysOnTop": "始终置顶",
-    "pinAndPassThrough": "置顶并点击穿透",
-    "pinAndPassThroughDescription": "置顶后主体不响应鼠标，仅保留取消置顶和关闭按钮。",
-    "unpin": "取消置顶并允许移动",
+    "alwaysOnTopDescription": "保持在其他窗口上方；不影响拖动、调整宽度或悬停提示。",
+    "unpin": "取消置顶",
+    "enableCompactMode": "切换到紧凑模式",
+    "disableCompactMode": "退出紧凑模式",
     "resizeFloating": "调整悬浮窗宽度",
     "opacity": "透明度：{{value}}%",
     "visibleFields": "显示的数据",
@@ -154,7 +158,7 @@
   },
   "usage": {
     "now": "现在", "seconds": "{{count}} 秒", "minutes": "{{count}} 分钟", "hours": "{{count}} 小时", "hoursMinutes": "{{hours}} 小时 {{minutes}} 分钟", "days": "{{count}} 天",
-    "left": "剩余 {{percent}}%", "resets": "{{time}} 后重置", "sessionResetCountdown": "5 小时重置：{{time}}", "weeklyResetCountdown": "每周重置：{{time}}", "exactReset": "具体重置时间：{{date}}", "fetching": "正在获取用量...", "noData": "没有速率限制数据",
+    "left": "剩余 {{percent}}%", "resets": "{{time}} 后重置", "sessionResetCountdown": "5 小时重置：{{time}}", "weeklyResetCountdown": "每周重置：{{time}}", "exactReset": "具体重置时间", "compactFiveHour": "5 小时剩余 {{percent}}", "compactWeekly": "每周剩余 {{percent}}", "compactUnavailable": "暂无额度数据", "fetching": "正在获取用量...", "noData": "没有速率限制数据",
     "fiveHour": "5 小时限制", "weekly": "每周限制", "credits": "余额：{{balance}}", "apiKeyManagedExternally": "API 用量由服务商管理"
   },
   "updates": {

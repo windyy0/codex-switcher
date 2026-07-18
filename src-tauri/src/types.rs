@@ -166,10 +166,29 @@ pub struct FloatingSettings {
     pub visible: bool,
     pub click_through: bool,
     pub always_on_top: bool,
+    pub compact_mode: bool,
     pub opacity: f64,
     pub position: Option<(i32, i32)>,
     pub size: Option<(u32, u32)>,
     pub visible_fields: Vec<FloatingField>,
+}
+
+impl FloatingSettings {
+    pub fn normalize_modes(&mut self, previous: Option<&Self>) -> bool {
+        if !self.compact_mode || !self.click_through {
+            return false;
+        }
+
+        let click_through_was_the_only_new_mode = previous.is_some_and(|old| {
+            old.click_through != self.click_through && old.compact_mode == self.compact_mode
+        });
+        if click_through_was_the_only_new_mode {
+            self.compact_mode = false;
+        } else {
+            self.click_through = false;
+        }
+        true
+    }
 }
 
 impl Default for FloatingSettings {
@@ -179,6 +198,7 @@ impl Default for FloatingSettings {
             visible: false,
             click_through: false,
             always_on_top: true,
+            compact_mode: false,
             opacity: 0.92,
             position: None,
             size: None,
@@ -607,7 +627,8 @@ pub struct CreditStatusDetails {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_chatgpt_id_token_claims, AppLanguage, AppSettings, DockDisplayMode, TrayDisplayMode,
+        parse_chatgpt_id_token_claims, AppLanguage, AppSettings, DockDisplayMode, FloatingSettings,
+        TrayDisplayMode,
     };
     use base64::Engine;
 
@@ -644,6 +665,26 @@ mod tests {
         assert_eq!(settings.taskbar.offset_y, 0);
         assert!(settings.floating.enabled);
         assert!(!settings.floating.visible);
+        assert!(!settings.floating.compact_mode);
         assert_eq!(settings.floating.opacity, 0.92);
+    }
+
+    #[test]
+    fn floating_compact_and_click_through_modes_are_mutually_exclusive() {
+        let mut legacy = FloatingSettings {
+            compact_mode: true,
+            click_through: true,
+            ..FloatingSettings::default()
+        };
+        assert!(legacy.normalize_modes(None));
+        assert!(legacy.compact_mode);
+        assert!(!legacy.click_through);
+
+        let previous = legacy.clone();
+        let mut enable_click_through = previous.clone();
+        enable_click_through.click_through = true;
+        assert!(enable_click_through.normalize_modes(Some(&previous)));
+        assert!(!enable_click_through.compact_mode);
+        assert!(enable_click_through.click_through);
     }
 }

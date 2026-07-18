@@ -24,6 +24,7 @@ export interface AppSettings {
     visible: boolean;
     click_through: boolean;
     always_on_top: boolean;
+    compact_mode: boolean;
     opacity: number;
     position: [number, number] | null;
     size: [number, number] | null;

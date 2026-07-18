@@ -15,8 +15,9 @@ pub fn get_app_settings() -> AppSettings {
 
 #[tauri::command]
 pub fn set_app_settings(app: AppHandle, mut settings: AppSettings) -> Result<AppSettings, String> {
+    let previous = load_app_settings().unwrap_or_default();
+    settings.floating.normalize_modes(Some(&previous.floating));
     settings.floating.opacity = settings.floating.opacity.clamp(0.25, 1.0);
-    settings.floating.click_through = settings.floating.always_on_top;
     if settings.floating.visible_fields.is_empty() {
         settings.floating.visible_fields = crate::types::FloatingSettings::default().visible_fields;
     }

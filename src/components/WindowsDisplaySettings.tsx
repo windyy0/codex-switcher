@@ -44,7 +44,12 @@ export function WindowsDisplaySettings({ section }: { section: "floating" | "tas
 
   if (!settings) return null;
   const updateTaskbar = (patch: Partial<AppSettings["taskbar"]>) => void save({ ...settings, taskbar: { ...settings.taskbar, ...patch } });
-  const updateFloating = (patch: Partial<AppSettings["floating"]>) => void save({ ...settings, floating: { ...settings.floating, ...patch } });
+  const updateFloating = (patch: Partial<AppSettings["floating"]>) => {
+    const floating = { ...settings.floating, ...patch };
+    if (patch.compact_mode === true) floating.click_through = false;
+    else if (patch.click_through === true) floating.compact_mode = false;
+    void save({ ...settings, floating });
+  };
   const updateOpacity = (value: number) => {
     setOpacityDraft(value);
     const next = { ...settings, floating: { ...settings.floating, opacity: value / 100 } };
@@ -90,8 +95,9 @@ export function WindowsDisplaySettings({ section }: { section: "floating" | "tas
       <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
         <div className="flex items-center justify-between gap-6 p-5"><div><div className="font-semibold text-gray-900 dark:text-gray-100">{t("settings.floatingWindow")}</div><p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("settings.floatingDescription")}</p></div><Toggle value={settings.floating.visible} label={t("settings.floatingWindow")} onChange={(visible) => updateFloating({ enabled: true, visible })} /></div>
         <div className="grid gap-5 border-t border-gray-100 p-5 dark:border-gray-800 sm:grid-cols-2">
-          <div className="space-y-4"><div className="flex items-center justify-between gap-3 text-sm"><span>{t("settings.pinAndPassThrough")}</span><Toggle value={settings.floating.always_on_top} label={t("settings.pinAndPassThrough")} onChange={(always_on_top) => updateFloating({ always_on_top, click_through: always_on_top })} /></div><p className="text-xs leading-5 text-gray-500 dark:text-gray-400">{t("settings.pinAndPassThroughDescription")}</p></div>
-          <label className="text-sm"><span>{t("settings.opacity", { value: opacityDraft ?? Math.round(settings.floating.opacity * 100) })}</span><input className="mt-3 w-full accent-emerald-500" type="range" min="25" max="100" value={opacityDraft ?? Math.round(settings.floating.opacity * 100)} onInput={(event) => updateOpacity(Number(event.currentTarget.value))} /></label>
+          <div className="space-y-3"><div className="flex items-center justify-between gap-3 text-sm"><span className="font-medium text-gray-800 dark:text-gray-100">{t("settings.alwaysOnTop")}</span><Toggle value={settings.floating.always_on_top} label={t("settings.alwaysOnTop")} onChange={(always_on_top) => updateFloating({ always_on_top })} /></div><p className="text-xs leading-5 text-gray-500 dark:text-gray-400">{t("settings.alwaysOnTopDescription")}</p></div>
+          <div className="space-y-3"><div className="flex items-center justify-between gap-3 text-sm"><span className="font-medium text-gray-800 dark:text-gray-100">{t("settings.clickThrough")}</span><Toggle value={settings.floating.click_through} label={t("settings.clickThrough")} onChange={(click_through) => updateFloating({ click_through })} /></div><p className="text-xs leading-5 text-gray-500 dark:text-gray-400">{t("settings.clickThroughDescription")}</p></div>
+          <label className="text-sm sm:col-span-2"><span>{t("settings.opacity", { value: opacityDraft ?? Math.round(settings.floating.opacity * 100) })}</span><input className="mt-3 w-full accent-emerald-500" type="range" min="25" max="100" value={opacityDraft ?? Math.round(settings.floating.opacity * 100)} onInput={(event) => updateOpacity(Number(event.currentTarget.value))} /></label>
         </div>
         <div className="border-t border-gray-100 px-5 py-4 dark:border-gray-800"><div className="mb-3 text-sm font-medium">{t("settings.visibleFields")}</div><div className="flex flex-wrap gap-2">{(["account", "primary_usage", "primary_reset", "secondary_usage"] as FloatingField[]).map((field) => <button key={field} onClick={() => toggleField(field)} className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${settings.floating.visible_fields.includes(field) ? "border-emerald-400 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : "border-gray-200 text-gray-500 dark:border-gray-700"}`}>{t(`settings.field_${field}`)}</button>)}</div></div>
       </div>
