@@ -28,6 +28,7 @@ use crate::{
 
 const CLASS_NAME: PCWSTR = w!("CodexSwitcherTaskbarWidget");
 const POSITION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+const COUNTDOWN_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 static HWND_WIDGET: AtomicIsize = AtomicIsize::new(0);
 static TASKBAR_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static LAST_DARK_MODE: AtomicU32 = AtomicU32::new(0);
@@ -40,7 +41,10 @@ struct WidgetModel {
     account_id: Option<String>,
     primary: Option<f64>,
     secondary: Option<f64>,
+    has_primary_window: bool,
+    has_secondary_window: bool,
     primary_resets_at: Option<i64>,
+    secondary_resets_at: Option<i64>,
     account: String,
     layout: TaskbarLayout,
     enabled: bool,
@@ -84,7 +88,10 @@ fn refresh_model(usage: Option<&UsageInfo>) {
         if model.account_id.as_deref() != active_id {
             model.primary = None;
             model.secondary = None;
+            model.has_primary_window = false;
+            model.has_secondary_window = false;
             model.primary_resets_at = None;
+            model.secondary_resets_at = None;
         }
         model.account_id = active_id.map(str::to_owned);
         model.enabled = settings.taskbar.enabled;
@@ -101,7 +108,14 @@ fn refresh_model(usage: Option<&UsageInfo>) {
         if let Some(usage) = usage.filter(|item| Some(item.account_id.as_str()) == active_id && item.error.is_none()) {
             model.primary = remaining(usage.primary_used_percent);
             model.secondary = remaining(usage.secondary_used_percent);
+            model.has_primary_window = usage.primary_used_percent.is_some()
+                || usage.primary_window_minutes.is_some()
+                || usage.primary_resets_at.is_some();
+            model.has_secondary_window = usage.secondary_used_percent.is_some()
+                || usage.secondary_window_minutes.is_some()
+                || usage.secondary_resets_at.is_some();
             model.primary_resets_at = usage.primary_resets_at;
+            model.secondary_resets_at = usage.secondary_resets_at;
         }
     }
 }
@@ -140,6 +154,7 @@ fn widget_thread() {
         TASKBAR_CREATED_MESSAGE.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
 
         let mut last_attach = Instant::now() - Duration::from_secs(5);
+        let mut last_countdown_refresh = Instant::now();
         let mut attach_failures = 0u8;
         loop {
             let current = hwnd_widget();
@@ -165,6 +180,12 @@ fn widget_thread() {
                 if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT { return; }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+            if last_countdown_refresh.elapsed() >= COUNTDOWN_REFRESH_INTERVAL {
+                last_countdown_refresh = Instant::now();
+                if !current.0.is_null() {
+                    let _ = InvalidateRect(current, None, false);
+                }
             }
             thread::sleep(Duration::from_millis(50));
         }
@@ -392,11 +413,13 @@ unsafe fn render_gdi(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
 }
 
 unsafe fn draw(rect: &mut RECT, value: &str, hdc: windows::Win32::Graphics::Gdi::HDC) {
+    if value.is_empty() { return; }
     let mut wide: Vec<u16> = value.encode_utf16().collect();
     let _ = DrawTextW(hdc, &mut wide, rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 unsafe fn draw_left(rect: &mut RECT, value: &str, hdc: windows::Win32::Graphics::Gdi::HDC) {
+    if value.is_empty() { return; }
     let mut wide: Vec<u16> = value.encode_utf16().collect();
     let _ = DrawTextW(hdc, &mut wide, rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
@@ -405,7 +428,29 @@ fn formatted_detailed_cells() -> [String; 4] {
     let model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
     let primary = model.primary.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "--".into());
     let secondary = model.secondary.map(|value| format!("{value:.0}%")).unwrap_or_else(|| "--".into());
-    let reset = reset_label(model.primary_resets_at);
+    let weekly_only = !model.has_primary_window && model.has_secondary_window;
+    let reset = reset_label(
+        if weekly_only { model.secondary_resets_at } else { model.primary_resets_at },
+        model.chinese,
+    );
+    if weekly_only {
+        return if model.chinese {
+            [
+                format!("周: {secondary}"),
+                format!("重置: {reset}"),
+                String::new(),
+                format!("账号: {}", model.account),
+            ]
+        } else {
+            [
+                format!("Week: {secondary}"),
+                format!("Reset: {reset}"),
+                String::new(),
+                model.account.clone(),
+            ]
+        };
+    }
+
     if model.chinese {
         [
             format!("5H: {primary}"),
@@ -427,19 +472,54 @@ fn formatted_lines() -> (TaskbarLayout, String, String) {
     let model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
     let p = model.primary.map(|v| format!("{v:.0}%")).unwrap_or_else(|| "--".into());
     let s = model.secondary.map(|v| format!("{v:.0}%")).unwrap_or_else(|| "--".into());
+    let weekly_only = !model.has_primary_window && model.has_secondary_window;
+    let reset = reset_label(
+        if weekly_only { model.secondary_resets_at } else { model.primary_resets_at },
+        model.chinese,
+    );
+
+    if weekly_only {
+        return match model.layout {
+            TaskbarLayout::Detailed if model.chinese => (model.layout, format!("周：{s}  重置：{reset}"), format!("账号：{}", model.account)),
+            TaskbarLayout::Detailed => (model.layout, format!("Week: {s}  Reset: {reset}"), model.account.clone()),
+            TaskbarLayout::Minimal if model.chinese => (model.layout, format!("周：{s}"), format!("重置：{reset}")),
+            TaskbarLayout::Minimal => (model.layout, format!("Week: {s}"), format!("Reset: {reset}")),
+            TaskbarLayout::Compact if model.chinese => (model.layout, format!("周 {s}  ·  {reset}"), String::new()),
+            TaskbarLayout::Compact => (model.layout, format!("W {s}  ·  {reset}"), String::new()),
+        };
+    }
+
     match model.layout {
-        TaskbarLayout::Detailed if model.chinese => (model.layout, format!("5H：{p}  重置：{}", reset_label(model.primary_resets_at)), format!("周：{s}  账号：{}", model.account)),
-        TaskbarLayout::Detailed => (model.layout, format!("5H: {p}  Reset: {}", reset_label(model.primary_resets_at)), format!("Week: {s}  {}", model.account)),
-        TaskbarLayout::Minimal if model.chinese => (model.layout, format!("5H：{p}"), format!("周：{s}")),
-        TaskbarLayout::Minimal => (model.layout, format!("5H: {p}"), format!("Week: {s}")),
-        TaskbarLayout::Compact => (model.layout, format!("5H {p}  ·  W {s}"), String::new()),
+        TaskbarLayout::Detailed if model.chinese => (model.layout, format!("5H：{p}  重置：{reset}"), format!("周：{s}  账号：{}", model.account)),
+        TaskbarLayout::Detailed => (model.layout, format!("5H: {p}  Reset: {reset}"), format!("Week: {s}  {}", model.account)),
+        TaskbarLayout::Minimal if model.chinese => (model.layout, format!("5H：{p} · {reset}"), format!("周：{s}")),
+        TaskbarLayout::Minimal => (model.layout, format!("5H: {p} · {reset}"), format!("Week: {s}")),
+        TaskbarLayout::Compact if model.chinese => (model.layout, format!("5H {p} · 周 {s} · {reset}"), String::new()),
+        TaskbarLayout::Compact => (model.layout, format!("5H {p} · W {s} · {reset}"), String::new()),
     }
 }
 
-fn reset_label(timestamp: Option<i64>) -> String {
+fn reset_label(timestamp: Option<i64>, chinese: bool) -> String {
+    reset_label_at(timestamp, chrono::Utc::now().timestamp(), chinese)
+}
+
+fn reset_label_at(timestamp: Option<i64>, now: i64, chinese: bool) -> String {
     let Some(timestamp) = timestamp else { return "--".into(); };
-    let minutes = ((timestamp - chrono::Utc::now().timestamp()).max(0) + 59) / 60;
-    if minutes < 60 { format!("{minutes}m") } else { format!("{}h", minutes / 60) }
+    let remaining_seconds = timestamp - now;
+    if remaining_seconds < 60 {
+        return if chinese { "现在".into() } else { "Now".into() };
+    }
+
+    if remaining_seconds >= 24 * 60 * 60 {
+        let days = remaining_seconds / (24 * 60 * 60);
+        if chinese { format!("{days}天") } else { format!("{days}d") }
+    } else if remaining_seconds >= 60 * 60 {
+        let hours = remaining_seconds / (60 * 60);
+        if chinese { format!("{hours}小时") } else { format!("{hours}h") }
+    } else {
+        let minutes = remaining_seconds / 60;
+        if chinese { format!("{minutes}分钟") } else { format!("{minutes}m") }
+    }
 }
 
 fn is_dark_mode() -> bool {
@@ -464,10 +544,55 @@ fn handle_double_click() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn remaining_is_clamped() {
         assert_eq!(remaining(Some(-5.0)), Some(100.0));
         assert_eq!(remaining(Some(110.0)), Some(0.0));
         assert_eq!(remaining(Some(f64::NAN)), None);
+    }
+
+    #[test]
+    fn weekly_only_usage_hides_session_and_shows_weekly_reset() {
+        {
+            let mut model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
+            model.layout = TaskbarLayout::Minimal;
+            model.chinese = false;
+            model.primary = None;
+            model.secondary = Some(65.0);
+            model.has_primary_window = false;
+            model.has_secondary_window = true;
+            model.primary_resets_at = None;
+            model.secondary_resets_at = Some(chrono::Utc::now().timestamp() + 3 * 24 * 60 * 60 + 60 * 60);
+        }
+
+        let (_, weekly, reset) = formatted_lines();
+        assert_eq!(weekly, "Week: 65%");
+        assert_eq!(reset, "Reset: 3d");
+
+        let cells = formatted_detailed_cells();
+        assert_eq!(cells[0], "Week: 65%");
+        assert!(cells.iter().all(|cell| !cell.contains("5H")));
+    }
+
+    #[test]
+    fn reset_labels_use_adaptive_localized_units() {
+        let now = 1_800_000_000;
+        assert_eq!(reset_label_at(Some(now + 3 * 24 * 60 * 60 + 4 * 60 * 60), now, true), "3天");
+        assert_eq!(reset_label_at(Some(now + 4 * 60 * 60 + 27 * 60), now, true), "4小时");
+        assert_eq!(reset_label_at(Some(now + 27 * 60), now, true), "27分钟");
+        assert_eq!(reset_label_at(Some(now), now, true), "现在");
+        assert_eq!(reset_label_at(Some(now + 3 * 24 * 60 * 60), now, false), "3d");
+        assert_eq!(reset_label_at(Some(now + 4 * 60 * 60), now, false), "4h");
+        assert_eq!(reset_label_at(Some(now + 27 * 60), now, false), "27m");
+        assert_eq!(reset_label_at(Some(now), now, false), "Now");
+    }
+
+    #[test]
+    fn reset_labels_do_not_roll_up_before_unit_boundaries() {
+        let now = 1_800_000_000;
+        assert_eq!(reset_label_at(Some(now + 24 * 60 * 60 - 1), now, true), "23小时");
+        assert_eq!(reset_label_at(Some(now + 60 * 60 - 1), now, true), "59分钟");
+        assert_eq!(reset_label_at(Some(now + 59), now, true), "现在");
     }
 }

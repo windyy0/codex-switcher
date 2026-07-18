@@ -86,4 +86,5 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           updaterJsonKeepUniversal: true
+          retryAttempts: 3
           args: --target ${{ matrix.target }}

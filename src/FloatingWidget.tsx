@@ -1,22 +1,46 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { invokeBackend } from "./lib/platform";
 import type { AccountInfo, AppSettings, UsageInfo } from "./types";
 
 const REFRESH_MS = 60_000;
+const FLOATING_HORIZONTAL_PADDING = 16;
+const FLOATING_CARD_VERTICAL_PADDING = 24;
+const FLOATING_BASE_CONTENT_WIDTH = 284;
+const FLOATING_MIN_HEIGHT = 110;
+const floatingWindow = getCurrentWindow();
 
 function remaining(used: number | null): number | null {
   return used == null || !Number.isFinite(used) ? null : Math.round(Math.max(0, Math.min(100, 100 - used)));
 }
 
-function resetLabel(timestamp: number | null): string {
-  if (timestamp == null) return "--";
-  const minutes = Math.max(0, Math.ceil((timestamp * 1000 - Date.now()) / 60_000));
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+function resetLabel(timestamp: number, t: TFunction): string {
+  const totalSeconds = Math.floor((timestamp * 1000 - Date.now()) / 1000);
+  if (totalSeconds < 60) return t("usage.now");
+
+  const days = Math.floor(totalSeconds / (24 * 60 * 60));
+  const hours = Math.floor((totalSeconds % (24 * 60 * 60)) / (60 * 60));
+  const minutes = Math.floor((totalSeconds % (60 * 60)) / 60);
+  const parts: string[] = [];
+
+  if (days > 0) parts.push(t("usage.days", { count: days }));
+  if (hours > 0 && parts.length < 2) parts.push(t("usage.hours", { count: hours }));
+  if (minutes > 0 && parts.length < 2) parts.push(t("usage.minutes", { count: minutes }));
+
+  return parts.length > 0 ? parts.join(" ") : t("usage.now");
+}
+
+function exactResetLabel(timestamp: number, locale: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp * 1000));
 }
 
 function UsageRow({ label, value }: { label: string; value: number | null }) {
@@ -35,16 +59,19 @@ function UsageRow({ label, value }: { label: string; value: number | null }) {
 }
 
 export default function FloatingWidget() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
+  const [usageReady, setUsageReady] = useState(false);
   const [offline, setOffline] = useState(false);
   const [controlTooltip, setControlTooltip] = useState<"pin" | "close" | null>(null);
   const [viewport, setViewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
   const dragTimer = useRef<number | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
+    setUsageReady(false);
     try {
       const active = await invokeBackend<AccountInfo | null>("get_active_account_info");
       setAccount(active);
@@ -57,7 +84,11 @@ export default function FloatingWidget() {
       const next = await invokeBackend<UsageInfo>("get_usage", { accountId: active.id });
       setOffline(Boolean(next.error));
       if (!next.error) setUsage(next);
-    } catch { setOffline(true); }
+    } catch {
+      setOffline(true);
+    } finally {
+      setUsageReady(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -78,9 +109,31 @@ export default function FloatingWidget() {
   const fields = useMemo(() => new Set(settings?.floating.visible_fields ?? []), [settings]);
   const primary = remaining(usage?.primary_used_percent ?? null);
   const secondary = remaining(usage?.secondary_used_percent ?? null);
+  const hasPrimaryWindow = Boolean(
+    usage &&
+      (usage.primary_used_percent != null ||
+        usage.primary_window_minutes != null ||
+        usage.primary_resets_at != null)
+  );
+  const hasSecondaryWindow = Boolean(
+    usage &&
+      (usage.secondary_used_percent != null ||
+        usage.secondary_window_minutes != null ||
+        usage.secondary_resets_at != null)
+  );
+  const activeReset = hasPrimaryWindow
+    ? usage?.primary_resets_at != null
+      ? { kind: "session" as const, timestamp: usage.primary_resets_at }
+      : null
+    : hasSecondaryWindow && usage?.secondary_resets_at != null
+      ? { kind: "weekly" as const, timestamp: usage.secondary_resets_at }
+      : null;
+  const showPrimaryUsage = fields.has("primary_usage") && primary !== null;
+  const showSecondaryUsage = fields.has("secondary_usage") && secondary !== null;
+  const showActiveReset = fields.has("primary_reset") && activeReset !== null;
   const contentScale = Math.max(
     0.5,
-    Math.min(2.5, Math.min((viewport.width - 16) / 284, (viewport.height - 16) / 168))
+    Math.min(2.5, (viewport.width - FLOATING_HORIZONTAL_PADDING) / FLOATING_BASE_CONTENT_WIDTH)
   );
   const isApiKeyAccount = account?.auth_mode === "api_key";
   const planKey = account?.plan_type?.toLowerCase() ?? (isApiKeyAccount ? "api_key" : "free");
@@ -97,12 +150,45 @@ export default function FloatingWidget() {
     free: "bg-slate-400/15 text-slate-300 border-slate-400/30",
     api_key: "bg-orange-400/15 text-orange-300 border-orange-400/30",
   };
+
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content || !settings || !usageReady) return;
+
+    const desiredHeight = Math.max(
+      FLOATING_MIN_HEIGHT,
+      Math.ceil(
+        FLOATING_HORIZONTAL_PADDING +
+          FLOATING_CARD_VERTICAL_PADDING +
+          content.scrollHeight * contentScale
+      )
+    );
+    if (Math.abs(viewport.height - desiredHeight) <= 1) return;
+
+    void floatingWindow
+      .setSize(new LogicalSize(viewport.width, desiredHeight))
+      .catch((error) => console.error("Failed to adapt floating window height:", error));
+  }, [
+    activeReset?.kind,
+    contentScale,
+    fields,
+    isApiKeyAccount,
+    showActiveReset,
+    showPrimaryUsage,
+    showSecondaryUsage,
+    settings,
+    t,
+    usageReady,
+    viewport.height,
+    viewport.width,
+  ]);
+
   const hide = async () => {
     if (settings) {
       const next = { ...settings, floating: { ...settings.floating, visible: false } };
       setSettings(await invokeBackend<AppSettings>("set_app_settings", { settings: next }));
     } else {
-      await getCurrentWindow().hide();
+      await floatingWindow.hide();
     }
   };
   const pin = async () => {
@@ -119,14 +205,14 @@ export default function FloatingWidget() {
     cancelLongPress();
     dragTimer.current = window.setTimeout(() => {
       dragTimer.current = null;
-      void getCurrentWindow().startDragging();
+      void floatingWindow.startDragging();
     }, 20);
   };
 
   return (
     <div className="h-full w-full p-2" style={{ opacity: settings?.floating.opacity ?? 0.92 }}>
       <div className={`relative h-full select-none overflow-hidden rounded-[20px] bg-slate-950/90 px-4 py-3 text-white backdrop-blur-xl ${settings?.floating.always_on_top ? "" : "cursor-move"}`} onPointerDown={startLongPress} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress}>
-        <div className="origin-top-left" style={{ width: `${100 / contentScale}%`, height: `${100 / contentScale}%`, transform: `scale(${contentScale})` }}>
+        <div ref={contentRef} className="origin-top-left" style={{ width: `${100 / contentScale}%`, transform: `scale(${contentScale})` }}>
         <div className="mb-3 flex h-7 items-center justify-between pr-16">
           <div className="flex min-w-0 items-center gap-2">
             <span className={`h-2 w-2 shrink-0 rounded-full ${isApiKeyAccount ? "bg-orange-400" : offline ? "bg-rose-400" : "bg-emerald-400"}`} />
@@ -140,9 +226,23 @@ export default function FloatingWidget() {
           </div>
         ) : (
           <div className="space-y-3">
-            {fields.has("primary_usage") && <UsageRow label={t("usage.fiveHour")} value={primary} />}
-            {fields.has("secondary_usage") && <UsageRow label={t("usage.weekly")} value={secondary} />}
-            {fields.has("primary_reset") && <div className="text-right text-[11px] text-slate-400">{t("usage.resets", { time: resetLabel(usage?.primary_resets_at ?? null) })}</div>}
+            {showPrimaryUsage && <UsageRow label={t("usage.fiveHour")} value={primary} />}
+            {showSecondaryUsage && <UsageRow label={t("usage.weekly")} value={secondary} />}
+            {showActiveReset && activeReset && (
+              <div
+                className="cursor-help text-right text-[11px] text-slate-400"
+                title={t("usage.exactReset", {
+                  date: exactResetLabel(activeReset.timestamp, i18n.resolvedLanguage ?? "en-US"),
+                })}
+              >
+                {t(
+                  activeReset.kind === "session"
+                    ? "usage.sessionResetCountdown"
+                    : "usage.weeklyResetCountdown",
+                  { time: resetLabel(activeReset.timestamp, t) }
+                )}
+              </div>
+            )}
           </div>
         )}
         </div>
@@ -151,7 +251,7 @@ export default function FloatingWidget() {
           <button aria-label={t("common.close")} onMouseEnter={() => setControlTooltip("close")} onMouseLeave={() => setControlTooltip(null)} className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white" onClick={() => void hide()}>×</button>
         </div>}
         {!settings?.floating.always_on_top && controlTooltip && <div className="pointer-events-none absolute top-11 z-20 whitespace-nowrap rounded-lg border border-white/10 bg-slate-950/95 px-2.5 py-1.5 text-[11px] font-medium text-slate-100 shadow-xl backdrop-blur-xl" style={{ right: controlTooltip === "pin" ? 62 : 30, transform: "translateX(50%)" }}>{controlTooltip === "pin" ? t("settings.pinAndPassThrough") : t("common.close")}</div>}
-        {!settings?.floating.always_on_top && <button aria-label={t("settings.resizeFloating")} className="absolute bottom-2 right-2 h-5 w-5 cursor-se-resize touch-none" onPointerDown={(event) => { event.stopPropagation(); void getCurrentWindow().startResizeDragging("SouthEast"); }}><span className="absolute bottom-0.5 right-0.5 h-2.5 w-2.5 border-b-2 border-r-2 border-white/35" /></button>}
+        {!settings?.floating.always_on_top && <button aria-label={t("settings.resizeFloating")} className="absolute bottom-2 right-2 h-5 w-5 cursor-e-resize touch-none" onPointerDown={(event) => { event.stopPropagation(); void floatingWindow.startResizeDragging("East"); }}><span className="absolute bottom-0.5 right-0.5 h-3 w-1.5 border-r-2 border-white/35" /></button>}
       </div>
     </div>
   );

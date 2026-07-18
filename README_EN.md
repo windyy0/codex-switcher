@@ -20,7 +20,7 @@
 - **Quick Switching** – Switch between accounts from the main window, native tray menu, or tray popup
 - **Usage Stats** – View account usage stats for OAuth accounts, including lifetime tokens, daily buckets, streaks, activity insights, and top integrations
 - **Manual Reset Credits** – See available manual reset credits beside each account plan badge, with the closest expiry highlighted as it approaches
-- **Automatic Warm-Up** – Warm up one account or all accounts manually, after each 5-hour reset window, or at specific scheduled times of day
+- **Automatic Warm-Up** – Warm up one account or all accounts manually, after each available usage-window reset, or at specific scheduled times of day
 - **System Tray Controls** – Use the tray popup to switch accounts, inspect quota and active-account stats, refresh usage, open the main window, or quit the app
 - **Tray Display Modes** – Choose between the app icon with session percentage, a text-only hourly/weekly percentage display, or a hidden tray icon
 - **macOS Dock Control** – Keep Codex Switcher in the Dock or run it as a menu bar only app, with a first-close prompt and a tray fallback
@@ -156,13 +156,15 @@ Dock mode.
 
 ## Warm-Up
 
-A warm-up sends one minimal request to an account so its current 5-hour usage
-window starts counting — handy for activating a window before you need it.
+A warm-up sends one minimal request to an account so its current usage window
+has activity before you need it.
 
 - **Manual** – warm up a single or all accounts, from the main window or tray menu.
-- **Automatic** – when enabled (per account or for all), the app warms an
-  account each time its 5-hour window resets, as long as the weekly limit isn't
-  exhausted.
+- **Automatic** – when enabled (per account or for all), the app tracks the
+  5-hour window when available and warms it after each reset, as long as the
+  weekly limit isn't exhausted. If only the weekly window is available, it
+  warms once after the weekly reset and automatically returns to the 5-hour
+  schedule if that window reappears.
 - **Timed** – pick specific times of day (e.g. `08:00`, `13:00`, `18:00`) from
   the **Timed** control in the main window. At each time the app warms all
   accounts (skipping any whose weekly limit is exhausted), so you control when
