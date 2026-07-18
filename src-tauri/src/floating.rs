@@ -63,7 +63,22 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                 WindowEvent::Moved(position) => {
                     let mut settings = load_app_settings().unwrap_or_default();
                     let next = Some((position.x, position.y));
-                    if settings.floating.position != next {
+                    // Hover preview temporarily enlarges and repositions the native host.
+                    // Keep the persisted coordinate tied to the visible 48x48 compact card;
+                    // the final move after shrinking back to compact is saved normally.
+                    let expanded_compact_preview = settings.floating.compact_mode
+                        && app_handle
+                            .get_webview_window(FLOATING_WINDOW)
+                            .and_then(|window| {
+                                let size = window.inner_size().ok()?;
+                                let scale = window.scale_factor().ok()?;
+                                Some(
+                                    size.width as f64 / scale > COMPACT_SIZE + 2.0
+                                        || size.height as f64 / scale > COMPACT_SIZE + 2.0,
+                                )
+                            })
+                            .unwrap_or(false);
+                    if !expanded_compact_preview && settings.floating.position != next {
                         settings.floating.position = next;
                         let _ = save_app_settings(&settings);
                         let _ = app_handle.emit(crate::commands::settings::SETTINGS_CHANGED_EVENT, settings);
@@ -137,8 +152,10 @@ fn position_controls<R: Runtime>(app: &AppHandle<R>, position: PhysicalPosition<
     let Ok(main_size) = main.outer_size() else { return; };
     let Ok(control_size) = controls.outer_size() else { return; };
     let scale = main.scale_factor().unwrap_or(1.0);
-    let right_margin = (24.0 * scale).round() as i32;
-    let top_offset = (20.0 * scale).round() as i32;
+    // The full floating card now fills its native window. Match the in-card
+    // controls (`right-4 top-3`) so enabling click-through does not shift them.
+    let right_margin = (16.0 * scale).round() as i32;
+    let top_offset = (12.0 * scale).round() as i32;
     let x = position.x + main_size.width as i32 - control_size.width as i32 - right_margin;
     let mut target = PhysicalPosition::new(x, position.y + top_offset);
 
@@ -288,6 +305,13 @@ pub fn toggle<R: Runtime>(app: &AppHandle<R>) {
 
 pub fn set_click_through<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
     let mut settings = load_app_settings().unwrap_or_default();
+    if enabled && settings.floating.compact_mode {
+        if let Some(window) = app.get_webview_window(FLOATING_WINDOW) {
+            if let Ok(position) = window.outer_position() {
+                settings.floating.position = Some((position.x, position.y));
+            }
+        }
+    }
     settings.floating.click_through = enabled;
     if enabled {
         settings.floating.compact_mode = false;

@@ -20,14 +20,21 @@ const FLOATING_MIN_WIDTH = 180;
 const FLOATING_DEFAULT_WIDTH = 300;
 const FLOATING_DEFAULT_HEIGHT = 184;
 const FLOATING_COMPACT_SIZE = 48;
-const FLOATING_FULL_INSET = 8;
 const COMPACT_EXPAND_DELAY_MS = 120;
 const COMPACT_COLLAPSE_DELAY_MS = 300;
-const PRESENTATION_TRANSITION_MS = 260;
+const PRESENTATION_TRANSITION_MS = 280;
 const floatingWindow = getCurrentWindow();
 
 type PresentationPhase = "compact" | "expanding" | "expanded" | "collapsing";
 type TransitionAnchor = { right: boolean; bottom: boolean };
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function waitFor(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
 function remaining(used: number | null): number | null {
   return used == null || !Number.isFinite(used) ? null : Math.round(Math.max(0, Math.min(100, 100 - used)));
@@ -101,8 +108,8 @@ export default function FloatingWidget() {
   const [presentationPhase, setPresentationPhase] = useState<PresentationPhase>(() =>
     window.innerWidth <= FLOATING_COMPACT_SIZE + 2 ? "compact" : "expanded"
   );
-  const [transitionProgress, setTransitionProgress] = useState(() =>
-    window.innerWidth <= FLOATING_COMPACT_SIZE + 2 ? 0 : 1
+  const [visualExpanded, setVisualExpanded] = useState(
+    () => window.innerWidth > FLOATING_COMPACT_SIZE + 2
   );
   const [transitionAnchor, setTransitionAnchor] = useState<TransitionAnchor>({ right: false, bottom: false });
   const [viewport, setViewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
@@ -114,10 +121,13 @@ export default function FloatingWidget() {
   const hoverArmed = useRef(true);
   const waitForPhysicalLeave = useRef(false);
   const resizeGeneration = useRef(0);
+  const presentationGeneration = useRef(0);
+  const transitionAnchorRef = useRef<TransitionAnchor | null>(null);
   const windowPresentation = useRef<"compact" | "expanded" | null>(null);
   const presentationTarget = useRef<"compact" | "expanded" | null>(null);
   const expandedSize = useRef<[number, number]>([FLOATING_DEFAULT_WIDTH, FLOATING_DEFAULT_HEIGHT]);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     setUsageReady(false);
@@ -163,6 +173,12 @@ export default function FloatingWidget() {
     return () => window.removeEventListener("resize", updateViewport);
   }, []);
 
+  useEffect(() => {
+    if (presentationPhase === "expanded") return;
+    setControlTooltip(null);
+    setResetTooltipVisible(false);
+  }, [presentationPhase]);
+
   const fields = useMemo(() => new Set(settings?.floating.visible_fields ?? []), [settings]);
   const primary = remaining(usage?.primary_used_percent ?? null);
   const secondary = remaining(usage?.secondary_used_percent ?? null);
@@ -203,9 +219,20 @@ export default function FloatingWidget() {
     : secondary !== null
       ? { value: secondary, label: t("usage.compactWeekly", { percent: `${secondary}%` }) }
       : { value: null, label: t("usage.compactUnavailable") };
+  useEffect(() => {
+    if (!compactMode && presentationPhase === "expanded") {
+      transitionAnchorRef.current = null;
+    }
+  }, [compactMode, presentationPhase]);
+  const expandedLayoutWidth = viewport.width >= FLOATING_MIN_WIDTH
+    ? viewport.width
+    : Math.max(FLOATING_MIN_WIDTH, settings?.floating.size?.[0] ?? expandedSize.current[0]);
+  const expandedLayoutHeight = viewport.height >= FLOATING_MIN_HEIGHT
+    ? viewport.height
+    : Math.max(FLOATING_MIN_HEIGHT, settings?.floating.size?.[1] ?? expandedSize.current[1]);
   const contentScale = Math.max(
     0.5,
-    Math.min(2.5, (viewport.width - FLOATING_HORIZONTAL_PADDING) / FLOATING_BASE_CONTENT_WIDTH)
+    Math.min(2.5, (expandedLayoutWidth - FLOATING_HORIZONTAL_PADDING) / FLOATING_BASE_CONTENT_WIDTH)
   );
   const isApiKeyAccount = account?.auth_mode === "api_key";
   const planKey = account?.plan_type?.toLowerCase() ?? (isApiKeyAccount ? "api_key" : "free");
@@ -223,15 +250,32 @@ export default function FloatingWidget() {
     api_key: "bg-orange-400/15 text-orange-300 border-orange-400/30",
   };
 
+  const resolveWindowAnchor = useCallback(async (): Promise<TransitionAnchor> => {
+    const [position, size, monitor] = await Promise.all([
+      floatingWindow.outerPosition(),
+      floatingWindow.outerSize(),
+      currentMonitor(),
+    ]);
+    const work = monitor?.workArea;
+    if (!work) return { right: false, bottom: false };
+    const workRight = work.position.x + work.size.width;
+    const workBottom = work.position.y + work.size.height;
+    return {
+      right:
+        Math.abs(workRight - (position.x + size.width)) <
+        Math.abs(position.x - work.position.x),
+      bottom:
+        Math.abs(workBottom - (position.y + size.height)) <
+        Math.abs(position.y - work.position.y),
+    };
+  }, []);
+
   const resizeWindowAnchored = useCallback(async (
     width: number,
     height: number,
     minWidth: number,
     minHeight: number,
-    duration = 0,
-    onPrepared?: (anchor: TransitionAnchor, startWidth: number, startHeight: number) => void,
-    onFrame?: (width: number, height: number) => void,
-    insetForSize?: (width: number, height: number) => number
+    preferredAnchor?: TransitionAnchor
   ): Promise<boolean> => {
     const generation = ++resizeGeneration.current;
     try {
@@ -246,73 +290,42 @@ export default function FloatingWidget() {
       const work = monitor?.workArea;
       const workRight = work ? work.position.x + work.size.width : 0;
       const workBottom = work ? work.position.y + work.size.height : 0;
-      const anchorRight = Boolean(
-        work &&
-          Math.abs(workRight - (oldPosition.x + oldSize.width)) <
-            Math.abs(oldPosition.x - work.position.x)
-      );
-      const anchorBottom = Boolean(
-        work &&
-          Math.abs(workBottom - (oldPosition.y + oldSize.height)) <
-            Math.abs(oldPosition.y - work.position.y)
-      );
-      const anchor = { right: anchorRight, bottom: anchorBottom };
-      const startWidth = oldSize.width / scaleFactor;
-      const startHeight = oldSize.height / scaleFactor;
-      const startInset = (insetForSize?.(startWidth, startHeight) ?? 0) * scaleFactor;
-      const fixedLeft = oldPosition.x + startInset;
-      const fixedTop = oldPosition.y + startInset;
-      const fixedRight = oldPosition.x + oldSize.width - startInset;
-      const fixedBottom = oldPosition.y + oldSize.height - startInset;
-
-      const placeAtSize = async (logicalWidth: number, logicalHeight: number) => {
-        const physicalWidth = Math.round(logicalWidth * scaleFactor);
-        const physicalHeight = Math.round(logicalHeight * scaleFactor);
-        const inset = (insetForSize?.(logicalWidth, logicalHeight) ?? 0) * scaleFactor;
-        let x = anchorRight ? fixedRight + inset - physicalWidth : fixedLeft - inset;
-        let y = anchorBottom ? fixedBottom + inset - physicalHeight : fixedTop - inset;
-        if (work) {
-          const maxX = Math.max(work.position.x, workRight - physicalWidth);
-          const maxY = Math.max(work.position.y, workBottom - physicalHeight);
-          x = Math.min(maxX, Math.max(work.position.x, x));
-          y = Math.min(maxY, Math.max(work.position.y, y));
-        }
-        await invokeBackend<void>("set_floating_bounds", {
-          x: Math.round(x),
-          y: Math.round(y),
-          width: physicalWidth,
-          height: physicalHeight,
-        });
-        return generation === resizeGeneration.current;
+      const anchor = preferredAnchor ?? {
+        right: Boolean(
+          work &&
+            Math.abs(workRight - (oldPosition.x + oldSize.width)) <
+              Math.abs(oldPosition.x - work.position.x)
+        ),
+        bottom: Boolean(
+          work &&
+            Math.abs(workBottom - (oldPosition.y + oldSize.height)) <
+              Math.abs(oldPosition.y - work.position.y)
+        ),
       };
+      const physicalWidth = Math.round(width * scaleFactor);
+      const physicalHeight = Math.round(height * scaleFactor);
+      let x = anchor.right ? oldPosition.x + oldSize.width - physicalWidth : oldPosition.x;
+      let y = anchor.bottom ? oldPosition.y + oldSize.height - physicalHeight : oldPosition.y;
+      if (work) {
+        const maxX = Math.max(work.position.x, workRight - physicalWidth);
+        const maxY = Math.max(work.position.y, workBottom - physicalHeight);
+        x = Math.min(maxX, Math.max(work.position.x, x));
+        y = Math.min(maxY, Math.max(work.position.y, y));
+      }
 
-      if (duration <= 0) {
+      const shrinking = physicalWidth < oldSize.width || physicalHeight < oldSize.height;
+      if (shrinking) {
         await floatingWindow.setMinSize(new LogicalSize(minWidth, minHeight));
         if (generation !== resizeGeneration.current) return false;
-        if (!await placeAtSize(width, height)) return false;
-      } else {
-        const shrinking = width < startWidth || height < startHeight;
-        if (shrinking) {
-          await floatingWindow.setMinSize(new LogicalSize(minWidth, minHeight));
-          if (generation !== resizeGeneration.current) return false;
-        }
-        onPrepared?.(anchor, startWidth, startHeight);
-        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-        const startedAt = performance.now();
-
-        while (generation === resizeGeneration.current) {
-          const progress = Math.min(1, (performance.now() - startedAt) / duration);
-          const eased = progress < 0.5
-            ? 4 * progress * progress * progress
-            : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-          const nextWidth = startWidth + (width - startWidth) * eased;
-          const nextHeight = startHeight + (height - startHeight) * eased;
-          onFrame?.(nextWidth, nextHeight);
-          if (!await placeAtSize(nextWidth, nextHeight)) return false;
-          if (progress >= 1) break;
-          await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-        }
-        if (generation !== resizeGeneration.current) return false;
+      }
+      await invokeBackend<void>("set_floating_bounds", {
+        x: Math.round(x),
+        y: Math.round(y),
+        width: physicalWidth,
+        height: physicalHeight,
+      });
+      if (generation !== resizeGeneration.current) return false;
+      if (!shrinking) {
         await floatingWindow.setMinSize(new LogicalSize(minWidth, minHeight));
       }
 
@@ -322,6 +335,33 @@ export default function FloatingWidget() {
       return false;
     }
   }, []);
+
+  const waitForSurfaceTransition = useCallback(async (generation: number): Promise<void> => {
+    if (prefersReducedMotion) return;
+    if (generation !== presentationGeneration.current) return;
+
+    const surface = surfaceRef.current;
+    if (!surface) {
+      await waitFor(PRESENTATION_TRANSITION_MS + 120);
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(fallback);
+        surface.removeEventListener("transitionend", handleTransitionEnd);
+        resolve();
+      };
+      const handleTransitionEnd = (event: TransitionEvent) => {
+        if (event.target === surface && event.propertyName === "width") finish();
+      };
+      const fallback = window.setTimeout(finish, PRESENTATION_TRANSITION_MS + 120);
+      surface.addEventListener("transitionend", handleTransitionEnd);
+    });
+  }, [prefersReducedMotion]);
 
   useEffect(() => {
     const savedSize = settings?.floating.size;
@@ -343,71 +383,98 @@ export default function FloatingWidget() {
     if (windowPresentation.current === presentation) return;
     windowPresentation.current = presentation;
     presentationTarget.current = presentation;
-
-    const initialPresentation = presentationPhase === presentation && (
+    const alreadyAtTarget = presentationPhase === presentation && (
       (presentation === "compact" && viewport.width <= FLOATING_COMPACT_SIZE + 2) ||
       (presentation === "expanded" && viewport.width >= FLOATING_MIN_WIDTH)
     );
-    const duration = prefersReducedMotion || initialPresentation ? 0 : PRESENTATION_TRANSITION_MS;
+    if (alreadyAtTarget) {
+      setVisualExpanded(presentation === "expanded");
+      return;
+    }
+    const generation = ++presentationGeneration.current;
+    ++resizeGeneration.current;
+
     const transition = async () => {
       const [savedWidth, savedHeight] = expandedSize.current;
-      const expandedTarget = {
-        width: Math.max(FLOATING_MIN_WIDTH, savedWidth),
-        height: Math.max(FLOATING_MIN_HEIGHT, savedHeight),
-        minWidth: FLOATING_MIN_WIDTH,
-        minHeight: FLOATING_MIN_HEIGHT,
-      };
-      const target = presentation === "compact"
-        ? {
-            width: FLOATING_COMPACT_SIZE,
-            height: FLOATING_COMPACT_SIZE,
-            minWidth: FLOATING_COMPACT_SIZE,
-            minHeight: FLOATING_COMPACT_SIZE,
-          }
-        : expandedTarget;
-      const progressForSize = (width: number, height: number) => {
-        const widthProgress = (width - FLOATING_COMPACT_SIZE) /
-          (expandedTarget.width - FLOATING_COMPACT_SIZE);
-        const heightProgress = (height - FLOATING_COMPACT_SIZE) /
-          (expandedTarget.height - FLOATING_COMPACT_SIZE);
-        return Math.max(0, Math.min(1, (widthProgress + heightProgress) / 2));
-      };
+      const expandedWidth = Math.max(FLOATING_MIN_WIDTH, savedWidth);
+      const measuredHeight = contentRef.current && usageReady
+        ? Math.ceil(FLOATING_CARD_VERTICAL_PADDING + contentRef.current.scrollHeight * contentScale)
+        : savedHeight;
+      const expandedHeight = Math.max(FLOATING_MIN_HEIGHT, measuredHeight);
+      expandedSize.current = [expandedWidth, expandedHeight];
+      const anchor = transitionAnchorRef.current ?? await resolveWindowAnchor();
+      if (generation !== presentationGeneration.current) return;
+      transitionAnchorRef.current = anchor;
+      setTransitionAnchor(anchor);
 
-      if (duration <= 0) {
-        setTransitionProgress(presentation === "compact" ? 0 : 1);
-        setPresentationPhase(presentation);
+      if (presentation === "expanded") {
+        const hostAlreadyExpanded = window.innerWidth >= FLOATING_MIN_WIDTH;
+        setPresentationPhase("expanding");
+        if (!hostAlreadyExpanded) {
+          setVisualExpanded(false);
+          await nextAnimationFrame();
+          if (generation !== presentationGeneration.current) return;
+          const resized = await resizeWindowAnchored(
+            expandedWidth,
+            expandedHeight,
+            FLOATING_MIN_WIDTH,
+            FLOATING_MIN_HEIGHT,
+            anchor
+          );
+          if (!resized || generation !== presentationGeneration.current) return;
+          setViewport({ width: expandedWidth, height: expandedHeight });
+          await nextAnimationFrame();
+        }
+        if (generation !== presentationGeneration.current) return;
+        const transitionFinished = waitForSurfaceTransition(generation);
+        setVisualExpanded(true);
+        await transitionFinished;
+        await nextAnimationFrame();
+        if (generation !== presentationGeneration.current) return;
+        await nextAnimationFrame();
+        if (generation !== presentationGeneration.current || presentationTarget.current !== "expanded") return;
+        setPresentationPhase("expanded");
+        if (!compactMode) transitionAnchorRef.current = null;
+        return;
       }
-      const completed = await resizeWindowAnchored(
-        target.width,
-        target.height,
-        target.minWidth,
-        target.minHeight,
-        duration,
-        duration > 0
-          ? (anchor, startWidth, startHeight) => {
-              setTransitionAnchor(anchor);
-              setTransitionProgress(progressForSize(startWidth, startHeight));
-              setPresentationPhase(presentation === "compact" ? "collapsing" : "expanding");
-            }
-          : undefined,
-        duration > 0
-          ? (width, height) => setTransitionProgress(progressForSize(width, height))
-          : undefined,
-        (width, height) => FLOATING_FULL_INSET * progressForSize(width, height)
+
+      setPresentationPhase("collapsing");
+      setVisualExpanded(true);
+      await nextAnimationFrame();
+      if (generation !== presentationGeneration.current) return;
+      const transitionFinished = waitForSurfaceTransition(generation);
+      setVisualExpanded(false);
+      await transitionFinished;
+      await nextAnimationFrame();
+      if (generation !== presentationGeneration.current) return;
+      await nextAnimationFrame();
+      if (generation !== presentationGeneration.current || presentationTarget.current !== "compact") return;
+      const resized = await resizeWindowAnchored(
+        FLOATING_COMPACT_SIZE,
+        FLOATING_COMPACT_SIZE,
+        FLOATING_COMPACT_SIZE,
+        FLOATING_COMPACT_SIZE,
+        anchor
       );
-      if (completed && presentationTarget.current === presentation) {
-        setTransitionProgress(presentation === "compact" ? 0 : 1);
-        setPresentationPhase(presentation);
-      }
+      if (!resized || generation !== presentationGeneration.current) return;
+      setViewport({ width: FLOATING_COMPACT_SIZE, height: FLOATING_COMPACT_SIZE });
+      setPresentationPhase("compact");
+      transitionAnchorRef.current = null;
+      void confirmPhysicalLeave();
     };
     void transition();
   }, [
     prefersReducedMotion,
-    presentationPhase,
+    resolveWindowAnchor,
     resizeWindowAnchored,
     settings,
     showCompactView,
+    compactMode,
+    contentScale,
+    presentationPhase,
+    usageReady,
     viewport.width,
+    waitForSurfaceTransition,
   ]);
 
   useLayoutEffect(() => {
@@ -423,9 +490,7 @@ export default function FloatingWidget() {
     const desiredHeight = Math.max(
       FLOATING_MIN_HEIGHT,
       Math.ceil(
-        FLOATING_HORIZONTAL_PADDING +
-          FLOATING_CARD_VERTICAL_PADDING +
-          content.scrollHeight * contentScale
+        FLOATING_CARD_VERTICAL_PADDING + content.scrollHeight * contentScale
       )
     );
     if (Math.abs(viewport.height - desiredHeight) <= 1) return;
@@ -485,12 +550,21 @@ export default function FloatingWidget() {
     if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
     collapseTimer.current = null;
   };
+  const interruptPresentation = (target: "compact" | "expanded") => {
+    if (presentationTarget.current === target) return;
+    presentationTarget.current = target;
+    ++presentationGeneration.current;
+    ++resizeGeneration.current;
+  };
   const scheduleCollapse = () => {
     clearCollapseTimer();
     if (!compactMode || dragging.current) return;
     collapseTimer.current = window.setTimeout(() => {
       collapseTimer.current = null;
-      if (!pointerInside.current && !dragging.current) setPreviewExpanded(false);
+      if (!pointerInside.current && !dragging.current) {
+        interruptPresentation("compact");
+        setPreviewExpanded(false);
+      }
     }, COMPACT_COLLAPSE_DELAY_MS);
   };
   const confirmPhysicalLeave = async () => {
@@ -517,6 +591,7 @@ export default function FloatingWidget() {
     clearCollapseTimer();
     if (compactMode && presentationPhase === "collapsing") {
       clearExpandTimer();
+      interruptPresentation("expanded");
       setPreviewExpanded(true);
       return;
     }
@@ -531,6 +606,7 @@ export default function FloatingWidget() {
     expandTimer.current = window.setTimeout(() => {
       expandTimer.current = null;
       if (pointerInside.current && hoverArmed.current && !waitForPhysicalLeave.current) {
+        interruptPresentation("expanded");
         setPreviewExpanded(true);
       }
     }, COMPACT_EXPAND_DELAY_MS);
@@ -564,6 +640,7 @@ export default function FloatingWidget() {
   };
   const beginDragging = async () => {
     dragging.current = true;
+    transitionAnchorRef.current = null;
     clearCollapseTimer();
     try {
       await floatingWindow.startDragging();
@@ -582,64 +659,60 @@ export default function FloatingWidget() {
   };
 
   const compactText = compactUsage.value == null ? "--" : `${compactUsage.value}%`;
-  const crossfadePosition = Math.max(0, Math.min(1, (transitionProgress - 0.18) / 0.52));
-  const expandedOpacity = crossfadePosition * crossfadePosition * (3 - 2 * crossfadePosition);
-  const compactOpacity = 1 - expandedOpacity;
-  const transitionInset = FLOATING_FULL_INSET * transitionProgress;
-  const transitionRadius = 14 + 6 * transitionProgress;
-  const transitionBackgroundOpacity = 0.95 - 0.05 * transitionProgress;
-  const transitionBorderOpacity = 0.1 * (1 - transitionProgress);
-
-  if (presentationPhase === "compact") {
-    return (
-      <div
-        className="h-full w-full"
-        style={{ opacity: settings?.floating.opacity ?? 0.92 }}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        <div
-          role="img"
-          aria-label={compactUsage.label}
-          className={`flex h-full w-full select-none items-center justify-center overflow-hidden rounded-[14px] border border-white/10 bg-slate-950/95 font-mono text-[13px] font-bold tracking-tight ${usageTextTone(compactUsage.value)} cursor-move`}
-          onPointerDown={startLongPress}
-          onPointerUp={cancelLongPress}
-          onPointerCancel={cancelLongPress}
-          onPointerLeave={cancelLongPress}
-        >
-          {compactText}
-        </div>
-      </div>
-    );
-  }
+  const transitioning = presentationPhase === "expanding" || presentationPhase === "collapsing";
+  const fullContentVisible = presentationPhase === "expanded" || visualExpanded;
+  const fullContentWidth = expandedLayoutWidth;
+  const fullContentHeight = expandedLayoutHeight;
+  const surfaceTransition = transitioning && !prefersReducedMotion
+    ? `width ${PRESENTATION_TRANSITION_MS}ms cubic-bezier(0.4, 0, 0.2, 1), height ${PRESENTATION_TRANSITION_MS}ms cubic-bezier(0.4, 0, 0.2, 1), border-radius ${PRESENTATION_TRANSITION_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`
+    : "none";
 
   return (
     <div
-      className={`relative h-full w-full p-2 ${presentationPhase === "expanding" || presentationPhase === "collapsing" ? "overflow-hidden rounded-[14px]" : ""}`}
+      className="relative h-full w-full overflow-hidden"
       style={{ opacity: settings?.floating.opacity ?? 0.92 }}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
     >
-      {(presentationPhase === "expanding" || presentationPhase === "collapsing") && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute"
-          style={{
-            inset: transitionInset,
-            border: `1px solid rgb(255 255 255 / ${transitionBorderOpacity})`,
-            borderRadius: transitionRadius,
-            backgroundColor: `rgb(2 6 23 / ${transitionBackgroundOpacity})`,
-          }}
-        />
-      )}
       <div
-        className={`relative h-full select-none overflow-hidden rounded-[20px] px-4 py-3 text-white ${presentationPhase === "expanded" ? "bg-slate-950/90 backdrop-blur-xl" : "bg-transparent"} ${settings?.floating.click_through ? "" : "cursor-move"}`}
-        style={presentationPhase === "expanded" ? undefined : { opacity: expandedOpacity }}
+        ref={surfaceRef}
+        className={`absolute select-none overflow-hidden border border-white/10 bg-slate-950/95 ${settings?.floating.click_through ? "" : "cursor-move"}`}
+        style={{
+          width: transitioning && !visualExpanded ? FLOATING_COMPACT_SIZE : "100%",
+          height: transitioning && !visualExpanded ? FLOATING_COMPACT_SIZE : "100%",
+          left: transitionAnchor.right ? undefined : 0,
+          right: transitionAnchor.right ? 0 : undefined,
+          top: transitionAnchor.bottom ? undefined : 0,
+          bottom: transitionAnchor.bottom ? 0 : undefined,
+          borderRadius: visualExpanded || presentationPhase === "expanded" ? 20 : 14,
+          transition: surfaceTransition,
+          willChange: transitioning ? "width, height, border-radius" : undefined,
+        }}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
         onPointerDown={startLongPress}
         onPointerUp={cancelLongPress}
         onPointerCancel={cancelLongPress}
         onPointerLeave={cancelLongPress}
       >
+        <div
+          aria-hidden={presentationPhase !== "expanded"}
+          inert={presentationPhase !== "expanded"}
+          className="absolute px-4 py-3 text-white"
+          style={{
+            width: fullContentWidth,
+            height: fullContentHeight,
+            left: transitionAnchor.right ? undefined : 0,
+            right: transitionAnchor.right ? 0 : undefined,
+            top: transitionAnchor.bottom ? undefined : 0,
+            bottom: transitionAnchor.bottom ? 0 : undefined,
+            opacity: fullContentVisible ? 1 : 0,
+            pointerEvents: presentationPhase === "expanded" ? "auto" : "none",
+            transition: transitioning && !prefersReducedMotion
+              ? fullContentVisible
+                ? "opacity 150ms ease-out 70ms"
+                : "opacity 90ms ease-in"
+              : "none",
+          }}
+        >
         <div ref={contentRef} className="origin-top-left" style={{ width: `${100 / contentScale}%`, transform: `scale(${contentScale})` }}>
         <div className="mb-3 flex h-7 items-center justify-between pr-32">
           <div className="flex min-w-0 items-center gap-2">
@@ -710,16 +783,23 @@ export default function FloatingWidget() {
         </div>}
         {!settings?.floating.click_through && controlTooltip && <div className="pointer-events-none absolute right-4 top-11 z-20 whitespace-nowrap rounded-lg border border-white/10 bg-slate-950/95 px-2.5 py-1.5 text-[11px] font-medium text-slate-100 shadow-xl backdrop-blur-xl">{controlTooltip === "top" ? topmostActionLabel : controlTooltip === "compact" ? compactActionLabel : controlTooltip === "through" ? t("settings.enableClickThrough") : t("common.close")}</div>}
         {!settings?.floating.click_through && !compactMode && <button aria-label={t("settings.resizeFloating")} className="absolute bottom-2 right-2 h-5 w-5 cursor-e-resize touch-none" onPointerDown={(event) => { event.stopPropagation(); void floatingWindow.startResizeDragging("East"); }}><span className="absolute bottom-0.5 right-0.5 h-3 w-1.5 border-r-2 border-white/35" /></button>}
-      </div>
-      {(presentationPhase === "expanding" || presentationPhase === "collapsing") && (
+        </div>
         <div
-          aria-hidden="true"
-          className={`pointer-events-none absolute z-50 flex h-12 w-12 select-none items-center justify-center font-mono text-[13px] font-bold tracking-tight ${usageTextTone(compactUsage.value)} ${transitionAnchor.right ? "right-0" : "left-0"} ${transitionAnchor.bottom ? "bottom-0" : "top-0"}`}
-          style={{ opacity: compactOpacity }}
+          role="img"
+          aria-label={compactUsage.label}
+          className={`pointer-events-none absolute inset-0 z-50 flex select-none items-center justify-center font-mono text-[13px] font-bold tracking-tight ${usageTextTone(compactUsage.value)}`}
+          style={{
+            opacity: fullContentVisible ? 0 : 1,
+            transition: transitioning && !prefersReducedMotion
+              ? fullContentVisible
+                ? "opacity 90ms ease-in"
+                : "opacity 140ms ease-out 80ms"
+              : "none",
+          }}
         >
           {compactText}
         </div>
-      )}
+      </div>
     </div>
   );
 }

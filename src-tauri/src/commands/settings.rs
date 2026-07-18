@@ -1,4 +1,6 @@
 use tauri::{AppHandle, Emitter};
+#[cfg(desktop)]
+use tauri::Manager;
 
 use crate::{
     auth::{load_app_settings, save_app_settings},
@@ -17,6 +19,14 @@ pub fn get_app_settings() -> AppSettings {
 pub fn set_app_settings(app: AppHandle, mut settings: AppSettings) -> Result<AppSettings, String> {
     let previous = load_app_settings().unwrap_or_default();
     settings.floating.normalize_modes(Some(&previous.floating));
+    #[cfg(desktop)]
+    if previous.floating.compact_mode && !settings.floating.compact_mode {
+        if let Some(window) = app.get_webview_window(crate::floating::FLOATING_WINDOW) {
+            if let Ok(position) = window.outer_position() {
+                settings.floating.position = Some((position.x, position.y));
+            }
+        }
+    }
     settings.floating.opacity = settings.floating.opacity.clamp(0.25, 1.0);
     if settings.floating.visible_fields.is_empty() {
         settings.floating.visible_fields = crate::types::FloatingSettings::default().visible_fields;

@@ -371,8 +371,23 @@ unsafe fn render_gdi(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
     let _ = SetBkMode(memory_dc, TRANSPARENT);
     let _ = SetTextColor(memory_dc, COLORREF(foreground));
 
-    let (layout, line1, line2) = formatted_lines();
-    if layout == TaskbarLayout::Detailed {
+    let (layout, line1, line2, weekly_only) = formatted_lines();
+    if layout == TaskbarLayout::Detailed && weekly_only {
+        let [weekly, reset, _, account] = formatted_detailed_cells();
+        let row_height = 16 * dpi / 96;
+        let content_height = row_height * 2;
+        let content_top = ((rect.bottom - rect.top - content_height) / 2).max(0);
+        let first_left = 16 * dpi / 96;
+        let second_left = 88 * dpi / 96;
+        let column_gap = 4 * dpi / 96;
+        let right = rect.right - 4 * dpi / 96;
+        let mut weekly_rect = RECT { left: first_left, top: content_top, right: second_left - column_gap, bottom: content_top + content_height };
+        let mut reset_rect = RECT { left: second_left, top: content_top, right, bottom: content_top + row_height };
+        let mut account_rect = RECT { left: second_left, top: content_top + row_height, right, bottom: content_top + content_height };
+        draw_left(&mut weekly_rect, &weekly, memory_dc);
+        draw_left(&mut reset_rect, &reset, memory_dc);
+        draw_left(&mut account_rect, &account, memory_dc);
+    } else if layout == TaskbarLayout::Detailed {
         let [top_left, top_right, bottom_left, bottom_right] = formatted_detailed_cells();
         let row_height = 16 * dpi / 96;
         let content_height = row_height * 2;
@@ -468,7 +483,7 @@ fn formatted_detailed_cells() -> [String; 4] {
     }
 }
 
-fn formatted_lines() -> (TaskbarLayout, String, String) {
+fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
     let model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
     let p = model.primary.map(|v| format!("{v:.0}%")).unwrap_or_else(|| "--".into());
     let s = model.secondary.map(|v| format!("{v:.0}%")).unwrap_or_else(|| "--".into());
@@ -480,22 +495,22 @@ fn formatted_lines() -> (TaskbarLayout, String, String) {
 
     if weekly_only {
         return match model.layout {
-            TaskbarLayout::Detailed if model.chinese => (model.layout, format!("周：{s}  重置：{reset}"), format!("账号：{}", model.account)),
-            TaskbarLayout::Detailed => (model.layout, format!("Week: {s}  Reset: {reset}"), model.account.clone()),
-            TaskbarLayout::Minimal if model.chinese => (model.layout, format!("周：{s}"), format!("重置：{reset}")),
-            TaskbarLayout::Minimal => (model.layout, format!("Week: {s}"), format!("Reset: {reset}")),
-            TaskbarLayout::Compact if model.chinese => (model.layout, format!("周 {s}  ·  {reset}"), String::new()),
-            TaskbarLayout::Compact => (model.layout, format!("W {s}  ·  {reset}"), String::new()),
+            TaskbarLayout::Detailed if model.chinese => (model.layout, format!("周 {s}"), format!("重置 {reset}"), true),
+            TaskbarLayout::Detailed => (model.layout, format!("Week {s}"), format!("Reset {reset}"), true),
+            TaskbarLayout::Minimal if model.chinese => (model.layout, format!("周：{s}"), format!("重置：{reset}"), false),
+            TaskbarLayout::Minimal => (model.layout, format!("Week: {s}"), format!("Reset: {reset}"), false),
+            TaskbarLayout::Compact if model.chinese => (model.layout, format!("周 {s}  ·  {reset}"), String::new(), false),
+            TaskbarLayout::Compact => (model.layout, format!("W {s}  ·  {reset}"), String::new(), false),
         };
     }
 
     match model.layout {
-        TaskbarLayout::Detailed if model.chinese => (model.layout, format!("5H：{p}  重置：{reset}"), format!("周：{s}  账号：{}", model.account)),
-        TaskbarLayout::Detailed => (model.layout, format!("5H: {p}  Reset: {reset}"), format!("Week: {s}  {}", model.account)),
-        TaskbarLayout::Minimal if model.chinese => (model.layout, format!("5H：{p} · {reset}"), format!("周：{s}")),
-        TaskbarLayout::Minimal => (model.layout, format!("5H: {p} · {reset}"), format!("Week: {s}")),
-        TaskbarLayout::Compact if model.chinese => (model.layout, format!("5H {p} · 周 {s} · {reset}"), String::new()),
-        TaskbarLayout::Compact => (model.layout, format!("5H {p} · W {s} · {reset}"), String::new()),
+        TaskbarLayout::Detailed if model.chinese => (model.layout, format!("5H：{p}  重置：{reset}"), format!("周：{s}  账号：{}", model.account), false),
+        TaskbarLayout::Detailed => (model.layout, format!("5H: {p}  Reset: {reset}"), format!("Week: {s}  {}", model.account), false),
+        TaskbarLayout::Minimal if model.chinese => (model.layout, format!("5H：{p} · {reset}"), format!("周：{s}"), false),
+        TaskbarLayout::Minimal => (model.layout, format!("5H: {p} · {reset}"), format!("Week: {s}"), false),
+        TaskbarLayout::Compact if model.chinese => (model.layout, format!("5H {p} · 周 {s} · {reset}"), String::new(), false),
+        TaskbarLayout::Compact => (model.layout, format!("5H {p} · W {s} · {reset}"), String::new(), false),
     }
 }
 
@@ -556,7 +571,7 @@ mod tests {
     fn weekly_only_usage_hides_session_and_shows_weekly_reset() {
         {
             let mut model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
-            model.layout = TaskbarLayout::Minimal;
+            model.layout = TaskbarLayout::Detailed;
             model.chinese = false;
             model.primary = None;
             model.secondary = Some(65.0);
@@ -564,14 +579,14 @@ mod tests {
             model.has_secondary_window = true;
             model.primary_resets_at = None;
             model.secondary_resets_at = Some(chrono::Utc::now().timestamp() + 3 * 24 * 60 * 60 + 60 * 60);
+            model.account = "work".into();
         }
 
-        let (_, weekly, reset) = formatted_lines();
-        assert_eq!(weekly, "Week: 65%");
-        assert_eq!(reset, "Reset: 3d");
+        let (_, _, _, weekly_only) = formatted_lines();
+        assert!(weekly_only);
 
         let cells = formatted_detailed_cells();
-        assert_eq!(cells[0], "Week: 65%");
+        assert_eq!(cells, ["Week: 65%", "Reset: 3d", "", "work"]);
         assert!(cells.iter().all(|cell| !cell.contains("5H")));
     }
 
