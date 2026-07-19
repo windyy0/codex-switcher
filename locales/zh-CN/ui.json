@@ -163,7 +163,7 @@
   },
   "updates": {
     "checking": "正在检查更新...", "upToDate": "Codex Switcher 已是最新版本。",
-    "available": "发现新版本：v{{version}}", "update": "更新", "downloading": "正在下载更新...", "ready": "更新已就绪，重启后生效。", "failed": "更新失败：{{error}}"
+    "available": "发现新版本：v{{version}}", "update": "更新", "ignoreVersion": "忽略此版本", "downloading": "正在下载更新...", "ready": "更新已就绪，重启后生效。", "failed": "更新失败：{{error}}"
   },
   "tray": {
     "loading": "正在加载...", "noAccounts": "尚未配置账户", "session": "会话", "weekly": "每周",

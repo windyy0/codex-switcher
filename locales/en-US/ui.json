@@ -299,6 +299,7 @@
     "upToDate": "Codex Switcher is up to date.",
     "available": "Update available: v{{version}}",
     "update": "Update",
+    "ignoreVersion": "Skip this version",
     "downloading": "Downloading update...",
     "ready": "Update ready. Restart to apply.",
     "failed": "Update failed: {{error}}"

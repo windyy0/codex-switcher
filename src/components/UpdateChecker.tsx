@@ -13,6 +13,28 @@ type UpdateStatus =
   | { kind: "error"; message: string };
 
 const MANUAL_UPDATE_CHECK_EVENT = "codex-switcher:check-for-update";
+const IGNORED_UPDATE_VERSION_STORAGE_KEY = "codex-switcher:ignored-update-version";
+
+function getIgnoredUpdateVersion(): string | null {
+  try {
+    return window.localStorage.getItem(IGNORED_UPDATE_VERSION_STORAGE_KEY);
+  } catch (err) {
+    console.warn("Could not read ignored update version:", err);
+    return null;
+  }
+}
+
+function setIgnoredUpdateVersion(version: string | null): void {
+  try {
+    if (version) {
+      window.localStorage.setItem(IGNORED_UPDATE_VERSION_STORAGE_KEY, version);
+    } else {
+      window.localStorage.removeItem(IGNORED_UPDATE_VERSION_STORAGE_KEY);
+    }
+  } catch (err) {
+    console.warn("Could not save ignored update version:", err);
+  }
+}
 
 export function requestUpdateCheck() {
   window.dispatchEvent(new Event(MANUAL_UPDATE_CHECK_EVENT));
@@ -32,8 +54,17 @@ export function UpdateChecker() {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (update) {
+        const ignoredVersion = getIgnoredUpdateVersion();
+        if (!manual && ignoredVersion === update.version) {
+          setStatus({ kind: "idle" });
+          return;
+        }
+        if (ignoredVersion && ignoredVersion !== update.version) {
+          setIgnoredUpdateVersion(null);
+        }
         setStatus({ kind: "available", update });
       } else {
+        setIgnoredUpdateVersion(null);
         setStatus(manual ? { kind: "upToDate" } : { kind: "idle" });
       }
     } catch (err) {
@@ -89,6 +120,12 @@ export function UpdateChecker() {
       console.error("Update install failed:", err);
       setStatus({ kind: "error", message });
     }
+  };
+
+  const handleIgnoreVersion = () => {
+    if (status.kind !== "available") return;
+    setIgnoredUpdateVersion(status.update.version);
+    setDismissed(true);
   };
 
   const handleRelaunch = async () => {
@@ -147,6 +184,12 @@ export function UpdateChecker() {
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
               >
                 {t("common.later")}
+              </button>
+              <button
+                onClick={handleIgnoreVersion}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+              >
+                {t("updates.ignoreVersion")}
               </button>
               <button
                 onClick={handleDownloadAndInstall}
