@@ -6,7 +6,13 @@ import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses
 import { AccountCard, AddAccountModal, UpdateChecker, requestUpdateCheck } from "./components";
 import { SelectMenu } from "./components/SelectMenu";
 import { WindowsDisplaySettings } from "./components/WindowsDisplaySettings";
-import type { AccountWithUsage, CodexProcessInfo, DockDisplayMode, UsageInfo } from "./types";
+import type {
+  AccountWithUsage,
+  CodexProcessInfo,
+  DockDisplayMode,
+  UsageInfo,
+  WarmupFailureInfo,
+} from "./types";
 import {
   exportFullBackupFile,
   importFullBackupFile,
@@ -40,6 +46,14 @@ import {
   type AutoWarmupWindow,
   type AutoWarmupWindowKind,
 } from "./lib/autoWarmupPolicy";
+import {
+  isWarmupModelUnavailable,
+  readStoredWarmupFailures,
+  truncateNotificationText,
+  warmupErrorFingerprint,
+  WARMUP_FAILURES_STORAGE_KEY,
+  type WarmupFailureLedger,
+} from "./lib/warmupFailures";
 import "./App.css";
 import {
   changeAppLanguage,
@@ -52,6 +66,10 @@ import {
 
 const AUTO_WARMUP_CHECK_INTERVAL_MS = 30 * 1000;
 const AUTO_WARMUP_RETRY_BACKOFF_MS = 60 * 1000;
+const WARMUP_ERROR_TOAST_DURATION_MS = 8 * 1000;
+const WARMUP_SUCCESS_TOAST_DURATION_MS = 2500;
+const WARMUP_NOTIFICATION_COOLDOWN_MS = 30 * 60 * 1000;
+const WARMUP_NOTIFICATION_BATCH_DELAY_MS = 750;
 const LIMIT_FULL_THRESHOLD = 99.5;
 const SWITCH_ACCOUNT_BLOCKED_EVENT = "switch-account-blocked";
 const CLOSE_BEHAVIOR_REQUESTED_EVENT = "close-behavior-requested";
@@ -70,6 +88,11 @@ type AutoWarmupLedger = Record<
     lastAutoWindowKind?: AutoWarmupWindowKind;
   }
 >;
+interface QueuedWarmupNotification {
+  accountId: string;
+  accountName: string;
+  error: string;
+}
 const appWindow = getCurrentWindow();
 const isMacOs =
   typeof navigator !== "undefined" &&
@@ -149,9 +172,14 @@ function getPreferredResetsAt(usage: UsageInfo | undefined): number | null | und
   return usage?.primary_resets_at ?? usage?.secondary_resets_at;
 }
 
-function getTimedWarmupTargets(accounts: AccountWithUsage[]): AccountWithUsage[] {
+function getTimedWarmupTargets(
+  accounts: AccountWithUsage[],
+  failures: WarmupFailureLedger
+): AccountWithUsage[] {
   return accounts.filter(
     (account) =>
+      !account.disabled &&
+      !failures[account.id]?.modelUnavailable &&
       account.usage &&
       !account.usageLoading &&
       !account.usage.error &&
@@ -173,6 +201,7 @@ function App() {
     switchAccount,
     deleteAccount,
     renameAccount,
+    setAccountDisabled,
     importFromFile,
     addApiAccount,
     exportAccountsSlimText,
@@ -217,6 +246,9 @@ function App() {
     message: string;
     isError: boolean;
   } | null>(null);
+  const [warmupFailures, setWarmupFailures] = useState<WarmupFailureLedger>(
+    readStoredWarmupFailures
+  );
   const [autoWarmupAllEnabled, setAutoWarmupAllEnabled] = useState(() => {
     return readAutoWarmupAllEnabled();
   });
@@ -261,6 +293,11 @@ function App() {
   const autoWarmupLedgerRef = useRef(autoWarmupLedger);
   const autoWarmupRunningIdsRef = useRef(autoWarmupRunningIds);
   const autoWarmupRetryAfterRef = useRef<Record<string, number>>({});
+  const warmupFailuresRef = useRef(warmupFailures);
+  const warmupToastTimerRef = useRef<number | null>(null);
+  const warmupNotificationLastSentRef = useRef<Record<string, number>>({});
+  const queuedWarmupNotificationsRef = useRef<QueuedWarmupNotification[]>([]);
+  const warmupNotificationFlushTimerRef = useRef<number | null>(null);
   const timedWarmupRunningRef = useRef(timedWarmupRunning);
   // Tracks the last calendar date (YYYY-MM-DD) each scheduled time fired on,
   // so each time triggers at most once per day.
@@ -315,12 +352,52 @@ function App() {
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
 
+    setWarmupFailures((prev) => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([accountId]) => validAccountIds.has(accountId))
+      );
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+
     for (const accountId of Object.keys(autoWarmupRetryAfterRef.current)) {
       if (!validAccountIds.has(accountId)) {
         delete autoWarmupRetryAfterRef.current[accountId];
       }
     }
   }, [accounts, error, loading]);
+
+  useEffect(() => {
+    warmupFailuresRef.current = warmupFailures;
+    try {
+      window.localStorage.setItem(
+        WARMUP_FAILURES_STORAGE_KEY,
+        JSON.stringify(warmupFailures)
+      );
+    } catch {
+      // Ignore storage errors; failure status still works for the current session.
+    }
+
+    for (const [accountId, failure] of Object.entries(warmupFailures)) {
+      if (failure.modelUnavailable) {
+        autoWarmupRetryAfterRef.current[accountId] = Number.POSITIVE_INFINITY;
+      } else if (
+        autoWarmupRetryAfterRef.current[accountId] === Number.POSITIVE_INFINITY
+      ) {
+        delete autoWarmupRetryAfterRef.current[accountId];
+      }
+    }
+  }, [warmupFailures]);
+
+  useEffect(() => {
+    return () => {
+      if (warmupToastTimerRef.current !== null) {
+        window.clearTimeout(warmupToastTimerRef.current);
+      }
+      if (warmupNotificationFlushTimerRef.current !== null) {
+        window.clearTimeout(warmupNotificationFlushTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     autoWarmupLedgerRef.current = autoWarmupLedger;
@@ -600,9 +677,23 @@ function App() {
     }
   };
 
+  const dismissWarmupToast = useCallback(() => {
+    if (warmupToastTimerRef.current !== null) {
+      window.clearTimeout(warmupToastTimerRef.current);
+      warmupToastTimerRef.current = null;
+    }
+    setWarmupToast(null);
+  }, []);
+
   const showWarmupToast = useCallback((message: string, isError = false) => {
+    if (warmupToastTimerRef.current !== null) {
+      window.clearTimeout(warmupToastTimerRef.current);
+    }
     setWarmupToast({ message, isError });
-    setTimeout(() => setWarmupToast(null), 2500);
+    warmupToastTimerRef.current = window.setTimeout(() => {
+      warmupToastTimerRef.current = null;
+      setWarmupToast(null);
+    }, isError ? WARMUP_ERROR_TOAST_DURATION_MS : WARMUP_SUCCESS_TOAST_DURATION_MS);
   }, []);
 
   const handleLanguageChange = useCallback(async (language: AppLanguage) => {
@@ -625,9 +716,122 @@ function App() {
     }
   }, [t]);
 
+  const dismissWarmupFailure = useCallback((accountId: string) => {
+    delete autoWarmupRetryAfterRef.current[accountId];
+    setWarmupFailures((prev) => {
+      if (!prev[accountId]) return prev;
+      const next = { ...prev };
+      delete next[accountId];
+      return next;
+    });
+  }, []);
+
+  const dismissModelUnavailableFailures = useCallback(() => {
+    setWarmupFailures((prev) => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([accountId, failure]) => {
+          if (!failure.modelUnavailable) return true;
+          delete autoWarmupRetryAfterRef.current[accountId];
+          return false;
+        })
+      );
+      return next;
+    });
+  }, []);
+
+  const clearWarmupFailure = useCallback((accountId: string) => {
+    delete autoWarmupRetryAfterRef.current[accountId];
+    setWarmupFailures((prev) => {
+      if (!prev[accountId]) return prev;
+      const next = { ...prev };
+      delete next[accountId];
+      return next;
+    });
+  }, []);
+
+  const recordWarmupFailure = useCallback(
+    (accountId: string, error: string): WarmupFailureInfo => {
+      const failure: WarmupFailureInfo = {
+        error,
+        failedAt: Date.now(),
+        modelUnavailable: isWarmupModelUnavailable(error),
+      };
+      if (failure.modelUnavailable) {
+        autoWarmupRetryAfterRef.current[accountId] = Number.POSITIVE_INFINITY;
+      }
+      setWarmupFailures((prev) => ({ ...prev, [accountId]: failure }));
+      return failure;
+    },
+    []
+  );
+
+  const flushWarmupFailureNotifications = useCallback(async () => {
+    const queued = queuedWarmupNotificationsRef.current;
+    queuedWarmupNotificationsRef.current = [];
+    if (queued.length === 0 || !isTauriRuntime()) return;
+
+    try {
+      const [visible, focused] = await Promise.all([
+        appWindow.isVisible(),
+        appWindow.isFocused(),
+      ]);
+      if (visible && focused) return;
+
+      const notifications = await import("@tauri-apps/plugin-notification");
+      let permissionGranted = await notifications.isPermissionGranted();
+      if (!permissionGranted) {
+        permissionGranted = (await notifications.requestPermission()) === "granted";
+      }
+      if (!permissionGranted) return;
+
+      const groups = new Map<string, QueuedWarmupNotification[]>();
+      for (const item of queued) {
+        const fingerprint = warmupErrorFingerprint(item.error);
+        const group = groups.get(fingerprint) ?? [];
+        group.push(item);
+        groups.set(fingerprint, group);
+      }
+
+      const now = Date.now();
+      for (const [fingerprint, group] of groups) {
+        const lastSentAt = warmupNotificationLastSentRef.current[fingerprint] ?? 0;
+        if (now - lastSentAt < WARMUP_NOTIFICATION_COOLDOWN_MS) continue;
+
+        const error = truncateNotificationText(group[0].error);
+        const body =
+          group.length === 1
+            ? t("warmup.notificationSingle", {
+                name: group[0].accountName,
+                error,
+              })
+            : t("warmup.notificationGrouped", { count: group.length, error });
+        notifications.sendNotification({
+          title: t("warmup.notificationTitle"),
+          body: truncateNotificationText(body, 240),
+        });
+        warmupNotificationLastSentRef.current[fingerprint] = now;
+      }
+    } catch (err) {
+      console.error("Failed to send warm-up system notification:", err);
+    }
+  }, [t]);
+
+  const queueWarmupFailureNotification = useCallback(
+    (accountId: string, accountName: string, error: string) => {
+      queuedWarmupNotificationsRef.current.push({ accountId, accountName, error });
+      if (warmupNotificationFlushTimerRef.current !== null) return;
+
+      warmupNotificationFlushTimerRef.current = window.setTimeout(() => {
+        warmupNotificationFlushTimerRef.current = null;
+        void flushWarmupFailureNotifications();
+      }, WARMUP_NOTIFICATION_BATCH_DELAY_MS);
+    },
+    [flushWarmupFailureNotifications]
+  );
+
   const markSuccessfulWarmup = useCallback(
     (accountId: string, timestamp = Date.now(), window?: AutoWarmupWindow) => {
-      delete autoWarmupRetryAfterRef.current[accountId];
+      clearWarmupFailure(accountId);
       setAutoWarmupLedger((prev) => ({
         ...prev,
         [accountId]: {
@@ -641,7 +845,7 @@ function App() {
         },
       }));
     },
-    []
+    [clearWarmupFailure]
   );
 
   const {
@@ -789,8 +993,11 @@ function App() {
       showWarmupToast(t("warmup.sentFor", { name: accountName }));
     } catch (err) {
       console.error("Failed to warm up account:", err);
+      const error = formatWarmupError(err);
+      recordWarmupFailure(accountId, error);
+      queueWarmupFailureNotification(accountId, accountName, error);
       showWarmupToast(
-        t("warmup.failedFor", { name: accountName, error: formatWarmupError(err) }),
+        t("warmup.failedFor", { name: accountName, error }),
         true
       );
     } finally {
@@ -809,11 +1016,31 @@ function App() {
 
       const warmedAt = Date.now();
       const failedAccountIds = new Set(summary.failed_account_ids);
-      accounts.filter((account) => account.auth_mode !== "api_key").forEach((account) => {
-        if (!failedAccountIds.has(account.id)) {
-          markSuccessfulWarmup(account.id, warmedAt);
-        }
-      });
+      accounts
+        .filter((account) => account.auth_mode !== "api_key" && !account.disabled)
+        .forEach((account) => {
+          if (!failedAccountIds.has(account.id)) {
+            markSuccessfulWarmup(account.id, warmedAt);
+          }
+        });
+
+      const failureDetails =
+        summary.failed_accounts && summary.failed_accounts.length > 0
+          ? summary.failed_accounts
+          : summary.failed_account_ids.map((accountId) => ({
+              account_id: accountId,
+              error: t("common.unknownError"),
+            }));
+      for (const failure of failureDetails) {
+        const account = accounts.find((item) => item.id === failure.account_id);
+        const accountName = account?.name ?? failure.account_id;
+        recordWarmupFailure(failure.account_id, failure.error);
+        queueWarmupFailureNotification(
+          failure.account_id,
+          accountName,
+          failure.error
+        );
+      }
 
       if (summary.failed_account_ids.length === 0) {
         showWarmupToast(
@@ -881,19 +1108,29 @@ function App() {
   const timedWarmupTargetsReady = useMemo(
     () => {
       const eligibleAccounts = accounts.filter(
-        (account) => account.auth_mode === "chat_g_p_t"
+        (account) =>
+          account.auth_mode === "chat_g_p_t" &&
+          !account.disabled &&
+          !warmupFailures[account.id]?.modelUnavailable
       );
       return (
         eligibleAccounts.length > 0 &&
         eligibleAccounts.every((account) => account.usage && !account.usageLoading)
       );
     },
-    [accounts]
+    [accounts, warmupFailures]
   );
 
   const timedWarmupTargetCount = useMemo(
-    () => getTimedWarmupTargets(accounts).length,
-    [accounts]
+    () => getTimedWarmupTargets(accounts, warmupFailures).length,
+    [accounts, warmupFailures]
+  );
+
+  const modelUnavailableFailureCount = useMemo(
+    () =>
+      Object.values(warmupFailures).filter((failure) => failure.modelUnavailable)
+        .length,
+    [warmupFailures]
   );
 
   const backOffAutoWarmupRetry = useCallback((accountId: string) => {
@@ -912,6 +1149,15 @@ function App() {
         } catch (err) {
           console.error("Auto warm-up usage refresh failed:", err);
           backOffAutoWarmupRetry(accountId);
+          const error = t("warmup.usageRefreshFailed", {
+            error: formatWarmupError(err),
+          });
+          recordWarmupFailure(accountId, error);
+          queueWarmupFailureNotification(accountId, accountName, error);
+          showWarmupToast(
+            t("warmup.autoFailedFor", { name: accountName, error }),
+            true
+          );
           return;
         }
 
@@ -932,10 +1178,13 @@ function App() {
       } catch (err) {
         console.error("Auto warm-up failed:", err);
         backOffAutoWarmupRetry(accountId);
+        const error = formatWarmupError(err);
+        recordWarmupFailure(accountId, error);
+        queueWarmupFailureNotification(accountId, accountName, error);
         showWarmupToast(
           t("warmup.autoFailedFor", {
             name: accountName,
-            error: formatWarmupError(err),
+            error,
           }),
           true
         );
@@ -952,6 +1201,8 @@ function App() {
       formatWarmupError,
       getDueAutoWarmupForAccount,
       markSuccessfulWarmup,
+      queueWarmupFailureNotification,
+      recordWarmupFailure,
       refreshSingleUsage,
       showWarmupToast,
       t,
@@ -964,6 +1215,8 @@ function App() {
 
     const checkAutoWarmup = () => {
       for (const account of accountsRef.current) {
+        if (account.disabled) continue;
+        if (warmupFailuresRef.current[account.id]?.modelUnavailable) continue;
         const autoEnabled =
           autoWarmupAllEnabled || autoWarmupAccountIdsRef.current.has(account.id);
         if (!autoEnabled || autoWarmupRunningIdsRef.current.has(account.id)) continue;
@@ -992,7 +1245,10 @@ function App() {
   ]);
 
   const runTimedWarmup = useCallback(async () => {
-    const targets = getTimedWarmupTargets(accountsRef.current);
+    const targets = getTimedWarmupTargets(
+      accountsRef.current,
+      warmupFailuresRef.current
+    );
     if (targets.length === 0) return;
 
     setTimedWarmupRunning(true);
@@ -1007,6 +1263,9 @@ function App() {
           warmed += 1;
         } catch (err) {
           console.error("Timed warm-up failed:", err);
+          const error = formatWarmupError(err);
+          recordWarmupFailure(account.id, error);
+          queueWarmupFailureNotification(account.id, account.name, error);
           failed += 1;
         }
       }
@@ -1019,7 +1278,15 @@ function App() {
     } finally {
       setTimedWarmupRunning(false);
     }
-  }, [markSuccessfulWarmup, showWarmupToast, t, warmupAccount]);
+  }, [
+    formatWarmupError,
+    markSuccessfulWarmup,
+    queueWarmupFailureNotification,
+    recordWarmupFailure,
+    showWarmupToast,
+    t,
+    warmupAccount,
+  ]);
 
   useEffect(() => {
     if (!timedWarmupEnabled || timedWarmupTimes.length === 0) return;
@@ -1472,7 +1739,12 @@ function App() {
               </button>
               <button
                 onClick={handleRefresh}
-                disabled={isRefreshing || !accounts.some((account) => account.auth_mode === "chat_g_p_t")}
+                disabled={
+                  isRefreshing ||
+                  !accounts.some(
+                    (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+                  )
+                }
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
                 data-tooltip={isRefreshing ? t("header.refreshingAll") : t("header.refreshAll")}
               >
@@ -1480,7 +1752,12 @@ function App() {
               </button>
               <button
                 onClick={handleWarmupAll}
-                disabled={isWarmingAll || accounts.length === 0}
+                disabled={
+                  isWarmingAll ||
+                  !accounts.some(
+                    (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+                  )
+                }
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
                 data-tooltip={t("header.warmupAll")}
               >
@@ -1730,6 +2007,30 @@ function App() {
           </div>
         ) : (
           <>
+        {modelUnavailableFailureCount > 0 && (
+          <div className="mb-6 flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-red-900 shadow-sm dark:border-red-800 dark:bg-red-950/40 dark:text-red-200">
+            <span className="mt-0.5 text-lg" aria-hidden="true">⚠</span>
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold">{t("warmup.modelUnavailableTitle")}</div>
+              <p className="mt-1 text-sm leading-5 text-red-700 dark:text-red-300">
+                {t("warmup.modelUnavailableDescription", {
+                  count: modelUnavailableFailureCount,
+                })}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={dismissModelUnavailableFailures}
+              className="rounded p-1 text-red-500 transition-colors hover:bg-red-100 hover:text-red-800 dark:text-red-400 dark:hover:bg-red-900/50 dark:hover:text-red-100"
+              aria-label={t("common.dismiss")}
+              data-tooltip={t("common.dismiss")}
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        )}
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="animate-spin h-10 w-10 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mb-4"></div>
@@ -1777,6 +2078,9 @@ function App() {
                     refreshSingleUsage(activeAccount.id, { refreshMetadata: true })
                   }
                   onRename={(newName) => renameAccount(activeAccount.id, newName)}
+                  onToggleDisabled={() =>
+                    setAccountDisabled(activeAccount.id, !activeAccount.disabled)
+                  }
                   onEditApiConfig={() => void openApiConfig(activeAccount)}
                   switching={switchingId === activeAccount.id}
                   switchDisabled={hasRunningProcesses ?? false}
@@ -1797,6 +2101,10 @@ function App() {
                     autoWarmupRunningIds.has(activeAccount.id)
                   )}
                   onToggleAutoWarmup={() => toggleAutoWarmupAccount(activeAccount.id)}
+                  warmupFailure={warmupFailures[activeAccount.id]}
+                  onDismissWarmupFailure={() =>
+                    dismissWarmupFailure(activeAccount.id)
+                  }
                 />
               </section>
             )}
@@ -1852,6 +2160,9 @@ function App() {
                         refreshSingleUsage(account.id, { refreshMetadata: true })
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
+                      onToggleDisabled={() =>
+                        setAccountDisabled(account.id, !account.disabled)
+                      }
                       onEditApiConfig={() => void openApiConfig(account)}
                       switching={switchingId === account.id}
                       switchDisabled={hasRunningProcesses ?? false}
@@ -1872,6 +2183,10 @@ function App() {
                         autoWarmupRunningIds.has(account.id)
                       )}
                       onToggleAutoWarmup={() => toggleAutoWarmupAccount(account.id)}
+                      warmupFailure={warmupFailures[account.id]}
+                      onDismissWarmupFailure={() =>
+                        dismissWarmupFailure(account.id)
+                      }
                     />
                   ))}
                 </div>
@@ -1893,13 +2208,28 @@ function App() {
       {/* Warm-up Toast */}
       {warmupToast && (
         <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 px-4 py-3 rounded-lg shadow-lg text-sm ${
+          className={`fixed bottom-20 left-1/2 z-50 flex max-w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-lg px-4 py-3 text-sm shadow-xl ${
             warmupToast.isError
               ? "bg-red-600 text-white"
               : "bg-amber-100 text-amber-900 border border-amber-300 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-700"
           }`}
         >
-          {warmupToast.message}
+          <span className="min-w-0 break-words">{warmupToast.message}</span>
+          <button
+            type="button"
+            onClick={dismissWarmupToast}
+            className={`shrink-0 rounded p-0.5 transition-colors ${
+              warmupToast.isError
+                ? "text-red-100 hover:bg-red-500 hover:text-white"
+                : "text-amber-700 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-800/60"
+            }`}
+            aria-label={t("common.dismiss")}
+            data-tooltip={t("common.dismiss")}
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
       )}
 

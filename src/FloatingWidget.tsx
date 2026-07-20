@@ -135,7 +135,7 @@ export default function FloatingWidget() {
       const active = await invokeBackend<AccountInfo | null>("get_active_account_info");
       setAccount(active);
       if (!active) { setUsage(null); setOffline(false); return; }
-      if (active.auth_mode === "api_key") {
+      if (active.auth_mode === "api_key" || active.disabled) {
         setUsage(null);
         setOffline(false);
         return;

@@ -287,6 +287,9 @@ pub struct StoredAccount {
     pub id: String,
     /// User-defined display name
     pub name: String,
+    /// Whether automatic requests and account switching are disabled.
+    #[serde(default)]
+    pub disabled: bool,
     /// Email extracted from ID token (for ChatGPT auth)
     pub email: Option<String>,
     /// Plan type: free, plus, pro, team, business, enterprise, edu
@@ -314,6 +317,7 @@ impl StoredAccount {
         Self {
             id: Uuid::new_v4().to_string(),
             name,
+            disabled: false,
             email: None,
             plan_type: None,
             subscription_expires_at: None,
@@ -339,6 +343,7 @@ impl StoredAccount {
         Self {
             id: Uuid::new_v4().to_string(),
             name,
+            disabled: false,
             email,
             plan_type,
             subscription_expires_at,
@@ -473,6 +478,7 @@ pub struct TokenData {
 pub struct AccountInfo {
     pub id: String,
     pub name: String,
+    pub disabled: bool,
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub subscription_expires_at: Option<DateTime<Utc>>,
@@ -495,6 +501,7 @@ impl AccountInfo {
         Self {
             id: account.id.clone(),
             name: account.name.clone(),
+            disabled: account.disabled,
             email: account.email.clone(),
             plan_type: account.plan_type.clone(),
             subscription_expires_at: account
@@ -567,6 +574,16 @@ pub struct WarmupSummary {
     pub warmed_accounts: usize,
     /// Account IDs whose warm-up request failed
     pub failed_account_ids: Vec<String>,
+    /// Failure details for displaying and grouping actionable errors
+    #[serde(default)]
+    pub failed_accounts: Vec<WarmupFailure>,
+}
+
+/// A failed warm-up request and its backend error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WarmupFailure {
+    pub account_id: String,
+    pub error: String,
 }
 
 /// Import summary for account config import operations.
@@ -628,7 +645,7 @@ pub struct CreditStatusDetails {
 mod tests {
     use super::{
         parse_chatgpt_id_token_claims, AppLanguage, AppSettings, DockDisplayMode, FloatingSettings,
-        TrayDisplayMode,
+        StoredAccount, TrayDisplayMode,
     };
     use base64::Engine;
 
@@ -649,6 +666,17 @@ mod tests {
                 .map(|value| value.to_rfc3339()),
             Some("2026-04-23T05:03:38+00:00".to_string())
         );
+    }
+
+    #[test]
+    fn legacy_accounts_default_to_enabled() {
+        let account = StoredAccount::new_api_key("Legacy".into(), "sk-test".into());
+        let mut value = serde_json::to_value(account).unwrap();
+        value.as_object_mut().unwrap().remove("disabled");
+
+        let decoded: StoredAccount = serde_json::from_value(value).unwrap();
+
+        assert!(!decoded.disabled);
     }
 
     #[test]

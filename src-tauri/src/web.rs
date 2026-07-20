@@ -17,8 +17,8 @@ use crate::commands::{
     get_active_account_info, get_api_account_config, get_app_language, get_masked_account_ids,
     import_accounts_full_encrypted_bytes, import_accounts_slim_text, kill_codex_processes,
     list_accounts, refresh_account_metadata, refresh_all_accounts_usage, rename_account,
-    set_api_account_config, set_masked_account_ids, start_login, switch_account, warmup_account,
-    warmup_all_accounts,
+    set_account_disabled, set_api_account_config, set_masked_account_ids, start_login,
+    switch_account, warmup_account, warmup_all_accounts,
 };
 use crate::types::AppLanguage;
 
@@ -48,6 +48,14 @@ struct RenameAccountArgs {
     account_id: String,
     #[serde(alias = "new_name")]
     new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetAccountDisabledArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    disabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,6 +257,10 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         "rename_account" => {
             let args: RenameAccountArgs = parse_args(payload)?;
             to_json(rename_account(args.account_id, args.new_name).await?)
+        }
+        "set_account_disabled" => {
+            let args: SetAccountDisabledArgs = parse_args(payload)?;
+            to_json(set_account_disabled(args.account_id, args.disabled).await?)
         }
         "start_login" => {
             let args: LoginArgs = parse_args(payload)?;

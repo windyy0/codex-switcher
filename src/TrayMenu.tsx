@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import type { AccountInfo, AccountUsageStats, DockDisplayMode, UsageInfo } from "./types";
+import {
+  ACCOUNT_USAGE_SOURCE_CHATGPT_BACKEND,
+  type AccountInfo,
+  type AccountUsageStats,
+  type DockDisplayMode,
+  type UsageInfo,
+} from "./types";
 import { invokeBackend, isTauriRuntime } from "./lib/platform";
 import {
   applyTheme,
@@ -104,7 +110,7 @@ function retainUsageForAccounts(
 ): Record<string, UsageInfo> {
   return Object.fromEntries(
     accounts.flatMap((account) =>
-      account.auth_mode === "chat_g_p_t" && usageById[account.id]
+      account.auth_mode === "chat_g_p_t" && !account.disabled && usageById[account.id]
         ? [[account.id, usageById[account.id]]]
         : []
     )
@@ -125,7 +131,9 @@ function TrayMenu() {
 
   // Fetch each account's rate-limit usage in parallel; rows fill in as they land.
   const loadUsage = useCallback(async (list: AccountInfo[]) => {
-    const eligibleAccounts = list.filter((account) => account.auth_mode === "chat_g_p_t");
+    const eligibleAccounts = list.filter(
+      (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+    );
     setUsageById((prev) => retainUsageForAccounts(prev, list));
     await Promise.all(
       eligibleAccounts.map(async (account) => {
@@ -160,7 +168,7 @@ function TrayMenu() {
   const loadActiveStats = useCallback(async (list: AccountInfo[]) => {
     const active = list.find((account) => account.is_active);
     if (!active) return;
-    if (active.auth_mode === "api_key") {
+    if (active.auth_mode === "api_key" || active.disabled) {
       setStatsById((prev) => {
         const next = { ...prev };
         delete next[active.id];
@@ -180,7 +188,7 @@ function TrayMenu() {
         [active.id]: {
           account_id: active.id,
           available: false,
-          source: "chatgpt_backend",
+          source: ACCOUNT_USAGE_SOURCE_CHATGPT_BACKEND,
           generated_at: null,
           stats_as_of: null,
           summary: {
@@ -230,7 +238,7 @@ function TrayMenu() {
     } finally {
       setLoading(false);
     }
-  }, [loadActiveStats, loadDockDisplayMode, loadUsage]);
+  }, [loadActiveStats, loadDockDisplayMode, loadUsage, t]);
 
   // Manual refresh: re-pull accounts and actively fetch fresh usage once.
   const handleRefresh = useCallback(async () => {
@@ -246,7 +254,7 @@ function TrayMenu() {
     } finally {
       setRefreshing(false);
     }
-  }, [loadActiveStats, loadUsage]);
+  }, [loadActiveStats, loadUsage, t]);
 
   const handleAutoWarmupToggle = useCallback(async () => {
     const next = !autoWarmupAllEnabled;
@@ -261,7 +269,7 @@ function TrayMenu() {
       setAutoWarmupAllEnabled(!next);
       setError(formatError(err, t));
     }
-  }, [autoWarmupAllEnabled]);
+  }, [autoWarmupAllEnabled, t]);
 
   const handleDockDisplayMode = useCallback(
     async (mode: DockDisplayMode) => {
@@ -277,7 +285,7 @@ function TrayMenu() {
         setError(formatError(err, t));
       }
     },
-    [dockDisplayMode]
+    [dockDisplayMode, t]
   );
 
   // Reload when the tray is reopened or accounts change elsewhere.
@@ -324,6 +332,7 @@ function TrayMenu() {
       void invokeBackend("hide_tray_window");
       return;
     }
+    if (account.disabled) return;
     try {
       setSwitchingId(account.id);
       setError(null);
@@ -376,7 +385,12 @@ function TrayMenu() {
         </button>
         <button
           onClick={() => void handleRefresh()}
-          disabled={refreshing || !accounts.some((account) => account.auth_mode === "chat_g_p_t")}
+          disabled={
+            refreshing ||
+            !accounts.some(
+              (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+            )
+          }
           data-tooltip={t("accountCard.refreshUsage")}
           className="flex h-6 w-6 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
         >
@@ -425,9 +439,11 @@ function TrayMenu() {
               <button
                 key={account.id}
                 onClick={() => void handleSwitch(account)}
-                disabled={switchingId !== null}
+                disabled={switchingId !== null || (account.disabled && !account.is_active)}
                 className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors disabled:opacity-60 ${
-                  account.is_active
+                  account.disabled
+                    ? "bg-gray-50 text-gray-400 dark:bg-gray-950/50 dark:text-gray-500"
+                    : account.is_active
                     ? "bg-gray-100 dark:bg-gray-800"
                     : "hover:bg-gray-100 dark:hover:bg-gray-800"
                 }`}
@@ -455,6 +471,11 @@ function TrayMenu() {
                     {plan && (
                       <span className="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200">
                         {plan}
+                      </span>
+                    )}
+                    {account.disabled && (
+                      <span className="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                        {t("accountCard.disabled")}
                       </span>
                     )}
                   </span>

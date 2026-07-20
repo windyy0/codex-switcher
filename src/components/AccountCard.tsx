@@ -1,7 +1,12 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import type { AccountResetCredits, AccountUsageStats as AccountUsageStatsInfo, AccountWithUsage } from "../types";
+import type {
+  AccountResetCredits,
+  AccountUsageStats as AccountUsageStatsInfo,
+  AccountWithUsage,
+  WarmupFailureInfo,
+} from "../types";
 import { invokeBackend } from "../lib/platform";
 import { AccountUsageStats } from "./AccountUsageStats";
 import { UsageBar } from "./UsageBar";
@@ -15,6 +20,7 @@ interface AccountCardProps {
   onDelete: () => void;
   onRefresh: () => Promise<unknown>;
   onRename: (newName: string) => Promise<void>;
+  onToggleDisabled: () => Promise<void>;
   onEditApiConfig?: () => void;
   switching?: boolean;
   switchDisabled?: boolean;
@@ -25,6 +31,8 @@ interface AccountCardProps {
   autoWarmupManagedByAll?: boolean;
   autoWarmupLabel?: string;
   onToggleAutoWarmup?: () => void;
+  warmupFailure?: WarmupFailureInfo;
+  onDismissWarmupFailure?: () => void;
 }
 
 function formatLastRefresh(date: Date | null, t: TFunction, locale: string): string {
@@ -169,6 +177,7 @@ export function AccountCard({
   onDelete,
   onRefresh,
   onRename,
+  onToggleDisabled,
   onEditApiConfig,
   switching,
   switchDisabled,
@@ -179,13 +188,14 @@ export function AccountCard({
   autoWarmupManagedByAll = false,
   autoWarmupLabel,
   onToggleAutoWarmup,
+  warmupFailure,
+  onDismissWarmupFailure,
 }: AccountCardProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? "en-US";
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(
-    account.usage && !account.usage.error ? new Date() : null
-  );
+  const [isTogglingDisabled, setIsTogglingDisabled] = useState(false);
+  const lastRefresh = account.usageUpdatedAt ? new Date(account.usageUpdatedAt) : null;
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(account.name);
   const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(null);
@@ -203,7 +213,6 @@ export function AccountCard({
     setIsRefreshing(true);
     try {
       await onRefresh();
-      setLastRefresh(new Date());
     } finally {
       setIsRefreshing(false);
     }
@@ -232,6 +241,23 @@ export function AccountCard({
     }
   };
 
+  const handleToggleDisabled = async () => {
+    setIsTogglingDisabled(true);
+    try {
+      await onToggleDisabled();
+    } catch (error) {
+      console.error("Failed to change account disabled state:", error);
+    } finally {
+      setIsTogglingDisabled(false);
+    }
+  };
+
+  const startRenaming = () => {
+    if (masked) return;
+    setEditName(account.name);
+    setIsEditing(true);
+  };
+
   const planDisplay = account.plan_type
     ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
     : account.auth_mode === "api_key"
@@ -250,7 +276,7 @@ export function AccountCard({
   const isApiKeyAccount = account.auth_mode === "api_key";
   const planKey = account.plan_type?.toLowerCase() || (isApiKeyAccount ? "api_key" : "free");
   const planColorClass = planColors[planKey] || planColors.free;
-  const supportsWarmup = !isApiKeyAccount;
+  const supportsWarmup = !isApiKeyAccount && !account.disabled;
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at, t, locale);
   const resetCreditsCount = formatResetCreditsCount(resetCredits, t);
   const compactResetCredits = !account.is_active;
@@ -260,7 +286,7 @@ export function AccountCard({
   const loadResetCredits = useCallback(async () => {
     const requestId = ++resetRequestSeq.current;
 
-    if (account.auth_mode !== "chat_g_p_t") {
+    if (account.auth_mode !== "chat_g_p_t" || account.disabled) {
       setResetCredits(null);
       return;
     }
@@ -275,7 +301,7 @@ export function AccountCard({
       if (requestId !== resetRequestSeq.current) return;
       setResetCredits(null);
     }
-  }, [account.auth_mode, account.id]);
+  }, [account.auth_mode, account.disabled, account.id]);
 
   const handleStatsLoaded = useCallback(
     (stats: AccountUsageStatsInfo | null) => {
@@ -287,7 +313,7 @@ export function AccountCard({
   useEffect(() => {
     setResetCredits(null);
 
-    if (account.auth_mode !== "chat_g_p_t") {
+    if (account.auth_mode !== "chat_g_p_t" || account.disabled) {
       resetRequestSeq.current += 1;
       return;
     }
@@ -307,7 +333,9 @@ export function AccountCard({
   return (
     <div
       className={`relative rounded-xl border p-5 transition-all duration-200 ${
-        account.is_active
+        account.disabled
+          ? "border-gray-200 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-950/50"
+          : account.is_active
           ? "bg-white dark:bg-gray-900 border-emerald-400 shadow-sm"
           : "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
       }`}
@@ -334,16 +362,26 @@ export function AccountCard({
               />
             ) : (
               <h3
-                className="font-semibold text-gray-900 dark:text-gray-100 truncate cursor-pointer hover:text-gray-600 dark:hover:text-gray-300"
-                onClick={() => {
-                  if (masked) return;
-                  setEditName(account.name);
-                  setIsEditing(true);
-                }}
+                className="min-w-0 truncate font-semibold text-gray-900 cursor-pointer hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300"
+                onClick={startRenaming}
                 data-tooltip={masked ? undefined : t("accountCard.rename")}
               >
                 <BlurredText blur={masked}>{account.name}</BlurredText>
               </h3>
+            )}
+            {!isEditing && (
+              <button
+                onClick={startRenaming}
+                disabled={masked}
+                className="shrink-0 rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                aria-label={t("accountCard.rename")}
+                data-tooltip={masked ? t("accountCard.showInfo") : t("accountCard.rename")}
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                  <path d="M4 13.5V16h2.5L15 7.5 12.5 5 4 13.5Z" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="m11.5 6 2.5 2.5" strokeLinecap="round" />
+                </svg>
+              </button>
             )}
           </div>
           {account.email && (
@@ -379,6 +417,11 @@ export function AccountCard({
           >
             {planDisplay}
           </span>
+          {account.disabled && (
+            <span className="rounded-full border border-gray-300 bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+              {t("accountCard.disabled")}
+            </span>
+          )}
           {resetCreditsCount && compactResetCredits && (
             <div
               className={`flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] leading-none ${resetCreditsTone.container} ${resetCreditsTone.text}`}
@@ -411,7 +454,52 @@ export function AccountCard({
         </div>
       </div>
 
-      {isApiKeyAccount ? (
+      {warmupFailure && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-red-800 dark:border-red-900/70 dark:bg-red-950/35 dark:text-red-200">
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0" aria-hidden="true">⚠</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-xs font-semibold">
+                  {warmupFailure.modelUnavailable
+                    ? t("accountCard.warmupModelUnavailable")
+                    : t("accountCard.warmupFailed")}
+                </span>
+                <span className="text-[11px] text-red-500 dark:text-red-400">
+                  {new Date(warmupFailure.failedAt).toLocaleString(locale)}
+                </span>
+              </div>
+              <p className="mt-1 break-words text-xs leading-5 text-red-700 dark:text-red-300">
+                {warmupFailure.error}
+              </p>
+              {warmupFailure.modelUnavailable && (
+                <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">
+                  {t("accountCard.autoWarmupPaused")}
+                </p>
+              )}
+            </div>
+            {onDismissWarmupFailure && (
+              <button
+                type="button"
+                onClick={onDismissWarmupFailure}
+                className="shrink-0 rounded p-1 text-red-400 transition-colors hover:bg-red-100 hover:text-red-700 dark:text-red-500 dark:hover:bg-red-900/50 dark:hover:text-red-200"
+                aria-label={t("common.dismiss")}
+                data-tooltip={t("common.dismiss")}
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
+                  <path d="M5 5l10 10M15 5 5 15" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {account.disabled ? (
+        <div className="mb-3 rounded-lg border border-dashed border-gray-300 bg-white/60 px-3 py-2.5 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400">
+          {t("accountCard.disabledDescription")}
+        </div>
+      ) : isApiKeyAccount ? (
         <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50/80 px-3 py-2.5 text-xs leading-5 text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
           {t("accountCard.apiUsageManagedExternally")}
         </div>
@@ -453,15 +541,27 @@ export function AccountCard({
         ) : (
           <button
             onClick={onSwitch}
-            disabled={switching || switchDisabled}
+            disabled={account.disabled || switching || switchDisabled}
             className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
-              switchDisabled
+              account.disabled || switchDisabled
                 ? "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed"
                 : "bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900"
             }`}
-            data-tooltip={switchDisabled ? t("accountCard.closeProcesses") : undefined}
+            data-tooltip={
+              account.disabled
+                ? t("accountCard.enableBeforeSwitch")
+                : switchDisabled
+                  ? t("accountCard.closeProcesses")
+                  : undefined
+            }
           >
-            {switching ? t("accountCard.switching") : switchDisabled ? t("accountCard.codexRunning") : t("accountCard.switch")}
+            {account.disabled
+              ? t("accountCard.disabled")
+              : switching
+                ? t("accountCard.switching")
+                : switchDisabled
+                  ? t("accountCard.codexRunning")
+                  : t("accountCard.switch")}
           </button>
         )}
         {supportsWarmup && <button
@@ -488,17 +588,22 @@ export function AccountCard({
                 : "bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
             } disabled:opacity-60`}
             data-tooltip={
-              autoWarmupManagedByAll
+              warmupFailure?.modelUnavailable
+                ? t("accountCard.autoWarmupPaused")
+                : autoWarmupManagedByAll
                 ? t("accountCard.autoAll")
                 : autoWarmupEnabled
                   ? t("accountCard.autoDisable")
                 : t("accountCard.autoEnable")
             }
           >
-            {autoWarmupLabel ?? (autoWarmupEnabled ? t("warmup.autoOn") : t("warmup.autoOff"))}
+            {warmupFailure?.modelUnavailable
+              ? t("warmup.autoPaused")
+              : autoWarmupLabel ??
+                (autoWarmupEnabled ? t("warmup.autoOn") : t("warmup.autoOff"))}
           </button>
         )}
-        {!isApiKeyAccount && <button
+        {!isApiKeyAccount && !account.disabled && <button
           onClick={handleRefresh}
           disabled={isRefreshing}
           className={`px-3 py-2 text-sm rounded-lg transition-colors ${
@@ -519,6 +624,22 @@ export function AccountCard({
             ⚙
           </button>
         )}
+        <button
+          onClick={() => void handleToggleDisabled()}
+          disabled={isTogglingDisabled}
+          className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50 ${
+            account.disabled
+              ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          }`}
+          data-tooltip={
+            account.disabled
+              ? t("accountCard.enableAccount")
+              : t("accountCard.disableAccount")
+          }
+        >
+          {account.disabled ? t("accountCard.enable") : t("accountCard.disable")}
+        </button>
         <button
           onClick={onDelete}
           className="px-3 py-2 text-sm rounded-lg bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-300 transition-colors"

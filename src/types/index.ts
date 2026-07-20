@@ -35,6 +35,7 @@ export interface AppSettings {
 export interface AccountInfo {
   id: string;
   name: string;
+  disabled: boolean;
   email: string | null;
   plan_type: string | null;
   subscription_expires_at: string | null;
@@ -110,6 +111,8 @@ export interface AccountResetCredits {
   credits: AccountResetCredit[];
 }
 
+export const ACCOUNT_USAGE_SOURCE_CHATGPT_BACKEND = "chatgpt_backend";
+
 export interface AccountUsageStats {
   account_id: string;
   available: boolean;
@@ -132,6 +135,7 @@ export interface OAuthLoginInfo {
 export interface AccountWithUsage extends AccountInfo {
   usage?: UsageInfo;
   usageLoading?: boolean;
+  usageUpdatedAt?: number;
 }
 
 export interface CodexProcessInfo {
@@ -145,6 +149,18 @@ export interface WarmupSummary {
   total_accounts: number;
   warmed_accounts: number;
   failed_account_ids: string[];
+  failed_accounts?: WarmupFailure[];
+}
+
+export interface WarmupFailure {
+  account_id: string;
+  error: string;
+}
+
+export interface WarmupFailureInfo {
+  error: string;
+  failedAt: number;
+  modelUnavailable: boolean;
 }
 
 export interface ImportAccountsSummary {

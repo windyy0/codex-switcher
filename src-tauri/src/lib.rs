@@ -26,9 +26,9 @@ use commands::{
     get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage, hide_tray_window,
     import_accounts_full_encrypted_file, import_accounts_slim_text, kill_codex_processes,
     list_accounts, open_main_window, quit_app, refresh_account_metadata,
-    refresh_all_accounts_usage, rename_account, report_usage, set_api_account_config,
-    set_app_language, set_app_settings, set_dock_display_mode, set_masked_account_ids, start_login,
-    switch_account, warmup_account, warmup_all_accounts,
+    refresh_all_accounts_usage, rename_account, report_usage, set_account_disabled,
+    set_api_account_config, set_app_language, set_app_settings, set_dock_display_mode,
+    set_masked_account_ids, start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -45,6 +45,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             {
@@ -97,6 +98,7 @@ pub fn run() {
             get_api_account_config,
             delete_account,
             rename_account,
+            set_account_disabled,
             export_accounts_slim_text,
             import_accounts_slim_text,
             export_accounts_full_encrypted_file,

@@ -59,6 +59,9 @@ struct AccountsCheckEntitlement {
 
 /// Get usage information for an account
 pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
+    if account.disabled {
+        anyhow::bail!("Account is disabled");
+    }
     println!("[Usage] Fetching usage for account: {}", account.name);
 
     match &account.auth_data {
@@ -85,6 +88,9 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
 
 /// Send a minimal authenticated request to warm up account traffic paths.
 pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
+    if account.disabled {
+        anyhow::bail!("Account is disabled");
+    }
     println!(
         "[Warmup] Sending warm-up request for account: {}",
         account.name
@@ -219,7 +225,7 @@ async fn warmup_with_chatgpt_auth(account: &StoredAccount) -> Result<()> {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         println!("[Warmup] ChatGPT warm-up error response: {body}");
-        anyhow::bail!("ChatGPT warm-up failed with status {status}");
+        anyhow::bail!(format_warmup_http_error(status, &body));
     }
 
     let body = response.text().await.unwrap_or_default();
@@ -366,12 +372,54 @@ fn log_warmup_response(source: &str, body: &str, is_sse: bool) {
 }
 
 fn truncate_text(text: &str, max_len: usize) -> String {
-    if text.len() <= max_len {
+    if text.chars().count() <= max_len {
         return text.to_string();
     }
-    let mut out = text[..max_len].to_string();
+    let mut out = text.chars().take(max_len).collect::<String>();
     out.push_str("...");
     out
+}
+
+fn format_warmup_http_error(status: StatusCode, body: &str) -> String {
+    let detail = extract_warmup_error_detail(body);
+    match detail {
+        Some(detail) => format!("ChatGPT warm-up failed with status {status}: {detail}"),
+        None => format!("ChatGPT warm-up failed with status {status}"),
+    }
+}
+
+fn extract_warmup_error_detail(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        let error = value.get("error").unwrap_or(&value);
+        let code = error
+            .get("code")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+
+        let detail = match (code, message) {
+            (Some(code), Some(message)) if !message.contains(code) => {
+                format!("{code}: {message}")
+            }
+            (_, Some(message)) => message.to_string(),
+            (Some(code), None) => code.to_string(),
+            (None, None) => return Some(truncate_text(trimmed, 240)),
+        };
+        return Some(truncate_text(&detail, 240));
+    }
+
+    Some(truncate_text(
+        trimmed.lines().next().unwrap_or(trimmed),
+        240,
+    ))
 }
 
 fn extract_text_from_sse(body: &str) -> Option<String> {
@@ -493,7 +541,9 @@ fn extract_credits(credits: Option<CreditStatusDetails>) -> Option<CreditStatusD
 pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
     let eligible_accounts = accounts
         .iter()
-        .filter(|account| matches!(account.auth_data, AuthData::ChatGPT { .. }))
+        .filter(|account| {
+            !account.disabled && matches!(account.auth_data, AuthData::ChatGPT { .. })
+        })
         .cloned()
         .collect::<Vec<_>>();
     println!(
@@ -523,6 +573,21 @@ pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn disabled_chatgpt_account() -> StoredAccount {
+        let mut account = StoredAccount::new_chatgpt(
+            "Archived".into(),
+            None,
+            None,
+            None,
+            "id-token".into(),
+            "access-token".into(),
+            "refresh-token".into(),
+            None,
+        );
+        account.disabled = true;
+        account
+    }
 
     fn rate_limit_window(used_percent: f64, window_seconds: i32) -> RateLimitWindow {
         RateLimitWindow {
@@ -580,5 +645,38 @@ mod tests {
 
         assert_eq!(primary.map(|window| window.used_percent), Some(11.0));
         assert_eq!(secondary.map(|window| window.used_percent), Some(22.0));
+    }
+
+    #[tokio::test]
+    async fn disabled_accounts_are_rejected_before_network_requests() {
+        let account = disabled_chatgpt_account();
+
+        let usage_error = get_account_usage(&account).await.unwrap_err();
+        let warmup_error = warmup_account(&account).await.unwrap_err();
+
+        assert_eq!(usage_error.to_string(), "Account is disabled");
+        assert_eq!(warmup_error.to_string(), "Account is disabled");
+    }
+
+    #[test]
+    fn warmup_http_errors_include_model_failure_details() {
+        let error = format_warmup_http_error(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":{"code":"model_not_found","message":"The requested model is unavailable."}}"#,
+        );
+
+        assert_eq!(
+            error,
+            "ChatGPT warm-up failed with status 400 Bad Request: model_not_found: The requested model is unavailable."
+        );
+    }
+
+    #[test]
+    fn warmup_http_error_details_are_unicode_safe_and_bounded() {
+        let detail = "模型不可用".repeat(100);
+        let error = format_warmup_http_error(StatusCode::NOT_FOUND, &detail);
+
+        assert!(error.starts_with("ChatGPT warm-up failed with status 404 Not Found: 模型不可用"));
+        assert!(error.ends_with("..."));
     }
 }

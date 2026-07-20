@@ -73,8 +73,8 @@
     "forceCloseTitle": "强制关闭正在运行的 Codex 进程",
     "openCodex": "打开 Codex",
     "opening": "正在打开...",
-    "showAll": "显示所有账户名称和邮箱",
-    "hideAll": "隐藏所有账户名称和邮箱",
+    "showAll": "显示所有账户别名和邮箱",
+    "hideAll": "隐藏所有账户别名和邮箱",
     "refreshingAll": "正在刷新全部用量",
     "refreshAll": "刷新全部用量",
     "warmupAll": "使用所有账户发送最小流量",
@@ -90,16 +90,20 @@
     "addAccount": "+ 添加账户"
   },
   "warmup": {
-    "warming": "预热中...", "autoOn": "自动：开", "autoOff": "自动：关", "autoSession": "自动：5 小时", "autoWeekly": "自动：每周", "windowSession": "5 小时", "windowWeekly": "每周", "autoWarming": "自动预热中...",
+    "warming": "预热中...", "autoOn": "自动：开", "autoOff": "自动：关", "autoPaused": "自动：已暂停", "autoSession": "自动：5 小时", "autoWeekly": "自动：每周", "windowSession": "5 小时", "windowWeekly": "每周", "autoWarming": "自动预热中...",
     "waitingWeekly": "等待每周额度重置", "timedWarming": "定时预热中...", "timedOff": "定时：关", "timedNext": "定时：{{time}}",
     "switchedFromTray": "已从托盘切换账户。", "switchFailed": "切换失败：{{error}}", "switchBlocked": "账户切换被阻止。",
     "closeFailed": "关闭失败：{{error}}", "switchedAfterClose": "强制关闭 Codex 后已切换账户。", "switchAfterCloseFailed": "强制关闭后切换失败：{{error}}",
     "sentFor": "已为 {{name}} 发送预热请求", "failedFor": "{{name}} 预热失败：{{error}}", "noneAvailable": "没有可预热的账户",
     "sentForAll": "已为全部 {{count}} 个账户发送预热请求", "sentForAll_other": "已为全部 {{count}} 个账户发送预热请求",
     "summary": "已预热 {{warmed}}/{{total}}，失败：{{failed}}", "allFailed": "全部预热失败：{{error}}",
-    "autoSentFor": "已为 {{name}} 自动预热", "autoSentForWindow": "已为 {{name}} 执行{{window}}自动预热", "autoFailedFor": "{{name}} 自动预热失败：{{error}}",
+    "autoSentFor": "已为 {{name}} 自动预热", "autoSentForWindow": "已为 {{name}} 执行{{window}}自动预热", "autoFailedFor": "{{name}} 自动预热失败：{{error}}", "usageRefreshFailed": "刷新用量失败：{{error}}",
     "timedSent": "已定时预热 {{count}} 个账户", "timedSent_other": "已定时预热 {{count}} 个账户",
-    "timedSummary": "定时预热：成功 {{warmed}} 个，失败 {{failed}} 个"
+    "timedSummary": "定时预热：成功 {{warmed}} 个，失败 {{failed}} 个",
+    "notificationTitle": "Codex Switcher 预热失败", "notificationSingle": "{{name}}：{{error}}",
+    "notificationGrouped": "{{count}} 个账户预热失败：{{error}}", "notificationGrouped_other": "{{count}} 个账户预热失败：{{error}}",
+    "modelUnavailableTitle": "当前预热模型不可用",
+    "modelUnavailableDescription": "已暂停 {{count}} 个账户的自动和定时预热，请更新软件或预热模型。", "modelUnavailableDescription_other": "已暂停 {{count}} 个账户的自动和定时预热，请更新软件或预热模型。"
   },
   "backup": {
     "exportSlim": "导出精简文本", "importSlim": "导入精简文本", "exportFull": "导出完整保护文件", "importFull": "导入完整保护文件",
@@ -131,8 +135,8 @@
     "changeLater": "之后可随时在托盘弹窗中更改。", "dontAsk": "不再询问", "keepDock": "保留在程序坞", "menuBarOnly": "仅菜单栏"
   },
   "addAccount": {
-    "title": "添加账户", "chatgptLogin": "ChatGPT 登录", "apiKey": "API Key", "importFile": "导入文件", "name": "账户名称", "namePlaceholder": "例如：工作账户",
-    "nameRequired": "请输入账户名称", "fileRequired": "请选择 auth.json 文件", "apiKeyRequired": "请输入 API Key", "waiting": "正在等待浏览器登录...",
+    "title": "添加账户", "chatgptLogin": "ChatGPT 登录", "apiKey": "API Key", "importFile": "导入文件", "name": "账户别名", "namePlaceholder": "例如：工作账户",
+    "nameRequired": "请输入账户别名", "fileRequired": "请选择 auth.json 文件", "apiKeyRequired": "请输入 API Key", "waiting": "正在等待浏览器登录...",
     "openLink": "请在浏览器中打开以下链接继续：", "copyLinkManually": "剪贴板不可用，请手动复制链接。", "copied": "已复制！",
     "remoteOauthWarning": "OAuth 登录必须在运行本程序的同一台主机上完成，因为回调会跳转到 localhost。",
     "loginHelp": "点击下方按钮生成登录链接，然后在浏览器中打开并完成认证。", "selectFile": "选择 auth.json 文件", "browse": "浏览...",
@@ -143,10 +147,10 @@
     "never": "从未", "justNow": "刚刚", "secondsAgo": "{{count}} 秒前", "minutesAgo": "{{count}} 分钟前", "hoursAgo": "{{count}} 小时前",
     "expiryUnavailable": "到期时间不可用", "expired": "已于 {{date}} 到期", "until": "有效期至 {{date}}", "resetCount": "{{count}} 次重置",
     "resetCount_other": "{{count}} 次重置", "closest": "最近 {{date}}", "closestExpires": "最近一批于 {{date}} 到期", "apiKey": "API 密钥",
-    "rename": "点击重命名", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "apiUsageManagedExternally": "API Key 账户不提供统一的用量和订阅信息，请前往对应服务商后台查看。", "active": "当前使用",
+    "rename": "点击重命名", "disabled": "已停用", "disable": "停用", "enable": "启用", "disableAccount": "停用账户", "enableAccount": "重新启用账户", "enableBeforeSwitch": "请先启用此账户再切换", "disabledDescription": "此账户已停用，自动请求和预热均已暂停，但保存的数据仍会保留。", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "apiUsageManagedExternally": "API Key 账户不提供统一的用量和订阅信息，请前往对应服务商后台查看。", "active": "当前使用",
     "closeProcesses": "请先关闭所有 Codex 进程", "switching": "切换中...", "codexRunning": "Codex 正在运行", "switch": "切换",
     "warmupSending": "正在发送预热请求...", "warmupSend": "发送最小预热请求", "autoAll": "已为所有账户开启自动预热",
-    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "移除账户"
+    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "warmupFailed": "最近一次预热失败", "warmupModelUnavailable": "预热模型不可用", "autoWarmupPaused": "自动和定时预热已暂停；手动预热成功后会自动恢复。", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "移除账户"
   },
   "apiConfig": {
     "title": "API 账户配置",
@@ -175,14 +179,14 @@
     "source": "通过 ChatGPT 后端获取的 Codex 用量统计", "chatgptOnly": "用量统计仅适用于 ChatGPT 账户。", "unavailable": "用量统计不可用。",
     "title": "用量统计", "updated": "更新于 {{time}}", "asOf": "统计截至 {{date}}", "backend": "ChatGPT 后端", "refresh": "刷新用量统计",
     "lifetime": "累计", "today": "今天", "lastSevenDays": "最近 7 天", "lastThirtyDays": "最近 30 天", "currentStreak": "当前连续天数",
-    "peakDay": "峰值日", "tokens": "tokens", "reported": "已统计", "days": "{{count}} 天", "days_other": "{{count}} 天",
+    "peakDay": "峰值日", "tokens": "tokens", "reported": "已统计", "days": "{{count, number}} 天", "days_other": "{{count, number}} 天",
     "justNow": "刚刚", "minutesAgo": "{{count}} 分钟前", "hoursAgo": "{{count}} 小时前",
     "rangeThirty": "最近 30 天", "rangeThreeMonths": "最近 3 个月", "rangeSixMonths": "最近 6 个月", "rangeAll": "全部统计",
     "optionThirty": "30 天", "optionThreeMonths": "3 个月", "optionSixMonths": "6 个月", "optionAll": "全部",
     "dailyUnavailable": "每日活动数据不可用", "tokenActivity": "Token 活动", "tokenActivityRange": "Token 活动范围",
     "moreDetails": "更多用量详情", "longestTask": "最长任务", "longestStreak": "最长连续天数", "activityInsights": "活动分析",
     "fastMode": "快速模式", "reasoning": "推理", "skillsExplored": "使用过的技能", "totalThreads": "总线程数",
-    "mostUsedPlugins": "最常用插件", "runs": "运行 {{count}} 次", "runs_other": "运行 {{count}} 次"
+    "mostUsedPlugins": "最常用插件", "runs": "运行 {{count, number}} 次", "runs_other": "运行 {{count, number}} 次"
   },
   "fileDialog": {
     "selectAuth": "选择 auth.json 文件", "exportFull": "导出完整保护账户配置", "importFull": "导入完整保护账户配置", "noFile": "未选择文件"

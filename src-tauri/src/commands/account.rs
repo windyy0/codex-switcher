@@ -103,6 +103,8 @@ struct SlimPayload {
 struct SlimAccountPayload {
     #[serde(rename = "n")]
     name: String,
+    #[serde(rename = "d", default, skip_serializing_if = "is_false")]
+    disabled: bool,
     #[serde(rename = "t")]
     auth_type: u8,
     #[serde(rename = "k", skip_serializing_if = "Option::is_none")]
@@ -111,6 +113,10 @@ struct SlimAccountPayload {
     refresh_token: Option<String>,
     #[serde(rename = "g", default, skip_serializing_if = "Option::is_none")]
     codex_config: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn slim_entry_exists(store: &AccountsStore, entry: &SlimAccountPayload) -> bool {
@@ -295,6 +301,9 @@ pub(crate) fn switch_account_by_id_unlocked(account_id: &str) -> Result<(), Stri
         .find(|a| a.id == account_id)
         .cloned()
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    if account.disabled {
+        return Err("Account is disabled".to_string());
+    }
     ensure_codex_not_running()?;
     let transition_snapshot = snapshot_codex_state().map_err(|e| e.to_string())?;
 
@@ -362,7 +371,7 @@ pub async fn delete_account(account_id: String) -> Result<(), String> {
     let replacement = store
         .accounts
         .iter()
-        .find(|account| account.id != account_id)
+        .find(|account| account.id != account_id && !account.disabled)
         .cloned();
     match &replacement {
         Some(account) => {
@@ -404,6 +413,32 @@ pub async fn rename_account(account_id: String, new_name: String) -> Result<(), 
     crate::auth::storage::update_account_metadata(&account_id, Some(new_name), None, None, None)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Enable or disable an account without deleting its stored credentials.
+#[tauri::command]
+pub async fn set_account_disabled(
+    account_id: String,
+    disabled: bool,
+) -> Result<AccountInfo, String> {
+    let _guard = lock_account_transition()?;
+    let mut store = load_accounts().map_err(|e| e.to_string())?;
+    let account = store
+        .accounts
+        .iter_mut()
+        .find(|account| account.id == account_id)
+        .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    account.disabled = disabled;
+    save_accounts(&store).map_err(|e| e.to_string())?;
+    crate::commands::usage::clear_usage_cache(&account_id);
+
+    let active_id = store.active_account_id.as_deref();
+    let account = store
+        .accounts
+        .iter()
+        .find(|account| account.id == account_id)
+        .expect("updated account should still exist");
+    Ok(AccountInfo::from_stored(account, active_id))
 }
 
 /// Save the config.toml to apply whenever an API-key account is switched to.
@@ -766,6 +801,7 @@ fn encode_slim_payload_from_store(store: &AccountsStore) -> anyhow::Result<Strin
         .map(|account| match &account.auth_data {
             AuthData::ApiKey { key } => SlimAccountPayload {
                 name: account.name.clone(),
+                disabled: account.disabled,
                 auth_type: SLIM_AUTH_API_KEY,
                 api_key: Some(key.clone()),
                 refresh_token: None,
@@ -773,6 +809,7 @@ fn encode_slim_payload_from_store(store: &AccountsStore) -> anyhow::Result<Strin
             },
             AuthData::ChatGPT { refresh_token, .. } => SlimAccountPayload {
                 name: account.name.clone(),
+                disabled: account.disabled,
                 auth_type: SLIM_AUTH_CHATGPT,
                 api_key: None,
                 refresh_token: Some(refresh_token.clone()),
@@ -919,12 +956,13 @@ async fn restore_slim_accounts(
     for entry in entries {
         let SlimAccountPayload {
             name: account_name,
+            disabled,
             auth_type,
             api_key,
             refresh_token,
             codex_config,
         } = entry;
-        let account = match auth_type {
+        let mut account = match auth_type {
             SLIM_AUTH_API_KEY => {
                 let mut account = StoredAccount::new_api_key(
                     account_name.clone(),
@@ -945,6 +983,7 @@ async fn restore_slim_accounts(
             }
             _ => anyhow::bail!("Unsupported auth type in slim payload"),
         };
+        account.disabled = disabled;
         restored.push(account);
     }
     Ok(restored)
@@ -1266,6 +1305,7 @@ mod api_switching_tests {
             active_name: None,
             accounts: vec![SlimAccountPayload {
                 name: "Legacy".to_string(),
+                disabled: false,
                 auth_type: SLIM_AUTH_API_KEY,
                 api_key: Some("sk-test".to_string()),
                 refresh_token: None,
@@ -1291,9 +1331,23 @@ mod api_switching_tests {
     }
 
     #[test]
+    fn slim_round_trip_preserves_disabled_accounts() {
+        let mut account = StoredAccount::new_api_key("Archived".into(), "sk-test".into());
+        account.disabled = true;
+        let mut store = AccountsStore::default();
+        store.accounts.push(account);
+
+        let encoded = encode_slim_payload_from_store(&store).expect("slim export should work");
+        let decoded = decode_slim_payload(&encoded).expect("slim import should work");
+
+        assert!(decoded.accounts[0].disabled);
+    }
+
+    #[test]
     fn slim_import_skips_a_source_token_consumed_by_another_process() {
         let entry = SlimAccountPayload {
             name: "Different local name".into(),
+            disabled: false,
             auth_type: SLIM_AUTH_CHATGPT,
             api_key: None,
             refresh_token: Some("rotated-source".into()),
@@ -1347,6 +1401,7 @@ mod api_switching_tests {
     fn full_export_is_versioned_and_excludes_local_backup_state() {
         let mut account = StoredAccount::new_api_key("Proxy".into(), "sk-test".into());
         account.codex_config = Some("model = \"proxy\"".into());
+        account.disabled = true;
         let mut store = AccountsStore::default();
         store.accounts.push(account);
         store.codex_config_backup_captured = true;
@@ -1369,6 +1424,7 @@ mod api_switching_tests {
             decoded.accounts[0].codex_config.as_deref(),
             Some("model = \"proxy\"")
         );
+        assert!(decoded.accounts[0].disabled);
         assert!(!decoded.codex_config_backup_captured);
         assert!(!decoded.codex_config_backup_existed);
         assert!(decoded.codex_config_backup.is_none());

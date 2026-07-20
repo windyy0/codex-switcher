@@ -74,14 +74,23 @@ export function useAccounts() {
         // Preserve existing usage data when just updating account info
         setAccounts((prev) => {
           const usageMap = new Map(
-            prev.map((a) => [a.id, { usage: a.usage, usageLoading: a.usageLoading }])
+            prev.map((a) => [a.id, {
+              usage: a.usage,
+              usageLoading: a.usageLoading,
+              usageUpdatedAt: a.usageUpdatedAt,
+            }])
           );
           return accountList.map((a) => ({
             ...a,
-            usage: a.auth_mode === "chat_g_p_t" ? usageMap.get(a.id)?.usage : undefined,
-            usageLoading: a.auth_mode === "chat_g_p_t"
+            usage: a.auth_mode === "chat_g_p_t" && !a.disabled
+              ? usageMap.get(a.id)?.usage
+              : undefined,
+            usageLoading: a.auth_mode === "chat_g_p_t" && !a.disabled
               ? usageMap.get(a.id)?.usageLoading
               : false,
+            usageUpdatedAt: a.auth_mode === "chat_g_p_t" && !a.disabled
+              ? usageMap.get(a.id)?.usageUpdatedAt
+              : undefined,
           }));
         });
       } else {
@@ -110,12 +119,14 @@ export function useAccounts() {
         // API key providers do not expose the ChatGPT subscription/rate-limit
         // endpoints. Keep them out of both metadata and usage polling instead
         // of manufacturing a recurring "usage unavailable" failure.
-        list = list.filter((account) => account.auth_mode === "chat_g_p_t");
+        list = list.filter(
+          (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+        );
 
         setAccounts((prev) =>
           prev.map((account) =>
-            account.auth_mode === "api_key"
-              ? { ...account, usage: undefined, usageLoading: false }
+            account.auth_mode === "api_key" || account.disabled
+              ? { ...account, usage: undefined, usageLoading: false, usageUpdatedAt: undefined }
               : account
           )
         );
@@ -173,6 +184,7 @@ export function useAccounts() {
           maxConcurrentUsageRequests
         );
 
+        const refreshedAt = Date.now();
         setAccounts((prev) =>
           prev.map((account) => {
             const usage = usageResults.get(account.id);
@@ -181,6 +193,7 @@ export function useAccounts() {
               ...account,
               usage,
               usageLoading: false,
+              usageUpdatedAt: usage.error ? account.usageUpdatedAt : refreshedAt,
             };
           })
         );
@@ -199,6 +212,9 @@ export function useAccounts() {
     options?: { refreshMetadata?: boolean }
   ) => {
     const account = accountsRef.current.find((candidate) => candidate.id === accountId);
+    if (account?.disabled) {
+      throw new Error("Account is disabled");
+    }
     if (account?.auth_mode === "api_key") {
       setAccounts((prev) =>
         prev.map((candidate) =>
@@ -228,9 +244,17 @@ export function useAccounts() {
         )
       );
       const usage = await invokeBackend<UsageInfo>("get_usage", { accountId, forceRefresh: true });
+      const refreshedAt = Date.now();
       setAccounts((prev) =>
         prev.map((a) =>
-          a.id === accountId ? { ...a, usage, usageLoading: false } : a
+          a.id === accountId
+            ? {
+                ...a,
+                usage,
+                usageLoading: false,
+                usageUpdatedAt: usage.error ? a.usageUpdatedAt : refreshedAt,
+              }
+            : a
         )
       );
       reportUsageToTray([usage]);
@@ -309,6 +333,14 @@ export function useAccounts() {
       } catch (err) {
         throw err;
       }
+    },
+    [loadAccounts]
+  );
+
+  const setAccountDisabled = useCallback(
+    async (accountId: string, disabled: boolean) => {
+      await invokeBackend<AccountInfo>("set_account_disabled", { accountId, disabled });
+      await loadAccounts(true);
     },
     [loadAccounts]
   );
@@ -493,6 +525,7 @@ export function useAccounts() {
     switchAccount,
     deleteAccount,
     renameAccount,
+    setAccountDisabled,
     importFromFile,
     addApiAccount,
     exportAccountsSlimText,

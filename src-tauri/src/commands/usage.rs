@@ -6,7 +6,7 @@ use crate::api::usage::{
 };
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
 use crate::commands::account::lock_account_transition;
-use crate::types::{AccountInfo, AuthData, UsageInfo, WarmupSummary};
+use crate::types::{AccountInfo, AuthData, UsageInfo, WarmupFailure, WarmupSummary};
 use futures::{stream, StreamExt};
 use std::{
     collections::HashMap,
@@ -29,11 +29,20 @@ static USAGE_CACHE: LazyLock<Mutex<HashMap<String, CachedUsage>>> =
 static USAGE_FETCH_LOCKS: LazyLock<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+pub fn clear_usage_cache(account_id: &str) {
+    if let Ok(mut cache) = USAGE_CACHE.lock() {
+        cache.remove(account_id);
+    }
+}
+
 /// Fetch usage info for a specific account (shared by the Tauri command and web mode).
 pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
     let account = get_account(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    if account.disabled {
+        return Err("Account is disabled".to_string());
+    }
 
     get_account_usage(&account).await.map_err(|e| e.to_string())
 }
@@ -77,6 +86,13 @@ pub async fn fetch_usage_cached(
     account_id: &str,
     force_refresh: bool,
 ) -> Result<UsageInfo, String> {
+    let account = get_account(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    if account.disabled {
+        return Err("Account is disabled".to_string());
+    }
+
     if !force_refresh {
         if let Some(usage) = cached_usage(account_id) {
             return Ok(usage);
@@ -132,6 +148,9 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
     let account = get_account(&account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    if account.disabled {
+        return Err("Account is disabled".to_string());
+    }
 
     let updated = match &account.auth_data {
         AuthData::ApiKey { .. } => account,
@@ -167,7 +186,9 @@ pub async fn refresh_all_accounts_usage() -> Result<Vec<UsageInfo>, String> {
     let eligible_accounts = store
         .accounts
         .into_iter()
-        .filter(|account| matches!(account.auth_data, AuthData::ChatGPT { .. }))
+        .filter(|account| {
+            !account.disabled && matches!(account.auth_data, AuthData::ChatGPT { .. })
+        })
         .collect::<Vec<_>>();
     Ok(refresh_all_usage(&eligible_accounts).await)
 }
@@ -178,6 +199,9 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
     let account = get_account(&account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    if account.disabled {
+        return Err("Account is disabled".to_string());
+    }
 
     send_warmup(&account).await.map_err(|e| e.to_string())
 }
@@ -189,30 +213,40 @@ pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
     let eligible_accounts = store
         .accounts
         .into_iter()
-        .filter(|account| matches!(account.auth_data, AuthData::ChatGPT { .. }))
+        .filter(|account| {
+            !account.disabled && matches!(account.auth_data, AuthData::ChatGPT { .. })
+        })
         .collect::<Vec<_>>();
     let total_accounts = eligible_accounts.len();
     let concurrency = total_accounts.min(10).max(1);
 
-    let results: Vec<(String, bool)> = stream::iter(eligible_accounts)
+    let results: Vec<(String, Option<String>)> = stream::iter(eligible_accounts)
         .map(|account| async move {
             let account_id = account.id.clone();
-            let failed = send_warmup(&account).await.is_err();
-            (account_id, failed)
+            let error = send_warmup(&account)
+                .await
+                .err()
+                .map(|error| error.to_string());
+            (account_id, error)
         })
         .buffer_unordered(concurrency)
         .collect()
         .await;
 
-    let failed_account_ids = results
+    let failed_accounts = results
         .into_iter()
-        .filter_map(|(account_id, failed)| failed.then_some(account_id))
+        .filter_map(|(account_id, error)| error.map(|error| WarmupFailure { account_id, error }))
+        .collect::<Vec<_>>();
+    let failed_account_ids = failed_accounts
+        .iter()
+        .map(|failure| failure.account_id.clone())
         .collect::<Vec<_>>();
 
-    let warmed_accounts = total_accounts.saturating_sub(failed_account_ids.len());
+    let warmed_accounts = total_accounts.saturating_sub(failed_accounts.len());
     Ok(WarmupSummary {
         total_accounts,
         warmed_accounts,
         failed_account_ids,
+        failed_accounts,
     })
 }
