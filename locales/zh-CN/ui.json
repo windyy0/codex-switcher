@@ -118,6 +118,11 @@
   "accounts": {
     "loading": "正在加载账户...", "loadFailed": "账户加载失败", "emptyTitle": "还没有账户", "emptyBody": "添加第一个 Codex 账户以开始使用",
     "add": "添加账户", "activeHeading": "当前账户", "otherHeading": "其他账户（{{count}}）", "sort": "排序",
+    "searchPlaceholder": "搜索账户名称、邮箱或套餐…", "showing": "显示 {{visible}} / {{total}}", "expiry": "到期",
+    "filterAll": "全部", "filterAvailable": "有剩余额度", "filterExhausted": "额度耗尽", "filterExpiring": "即将到期", "filterDisabled": "已停用", "filterApi": "API Key",
+    "subscriptionExpiry": "订阅到期", "expiryUnavailable": "暂无到期信息", "layout": "布局", "layoutList": "列表模式", "layoutCard": "卡片模式", "allHeading": "账户（{{count}}）",
+    "details": "账户详情", "openDetails": "查看 {{name}} 的详情", "noMatches": "没有匹配的账户", "noMatchesHint": "尝试更换关键词或筛选条件。",
+    "sortRecommended": "推荐使用",
     "sortResetAsc": "重置时间：从早到晚", "sortResetDesc": "重置时间：从晚到早", "sortRemainingDesc": "剩余额度：从高到低",
     "sortRemainingAsc": "剩余额度：从低到高", "sortExpiryAsc": "到期时间：从早到晚", "sortExpiryDesc": "到期时间：从晚到早",
     "refreshSuccess": "用量刷新成功", "deleteConfirm": "再次点击删除以确认移除"
@@ -150,7 +155,7 @@
     "rename": "点击重命名", "disabled": "已停用", "disable": "停用", "enable": "启用", "disableAccount": "停用账户", "enableAccount": "重新启用账户", "enableBeforeSwitch": "请先启用此账户再切换", "disabledDescription": "此账户已停用，自动请求和预热均已暂停，但保存的数据仍会保留。", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "apiUsageManagedExternally": "API Key 账户不提供统一的用量和订阅信息，请前往对应服务商后台查看。", "active": "当前使用",
     "closeProcesses": "请先关闭所有 Codex 进程", "switching": "切换中...", "codexRunning": "Codex 正在运行", "switch": "切换",
     "warmupSending": "正在发送预热请求...", "warmupSend": "发送最小预热请求", "autoAll": "已为所有账户开启自动预热",
-    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "warmupFailed": "最近一次预热失败", "warmupModelUnavailable": "预热模型不可用", "autoWarmupPaused": "自动和定时预热已暂停；手动预热成功后会自动恢复。", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "移除账户"
+    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "warmupFailed": "最近一次预热失败", "warmupModelUnavailable": "预热模型不可用", "autoWarmupPaused": "自动和定时预热已暂停；手动预热成功后会自动恢复。", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "移除账户", "manage": "更多账户操作"
   },
   "apiConfig": {
     "title": "API 账户配置",

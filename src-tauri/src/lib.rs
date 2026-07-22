@@ -40,6 +40,16 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             commands::restore_main_window(app);
         }));
+        builder = builder.plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_filter(|label| label == "main")
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        );
     }
 
     builder
@@ -61,6 +71,19 @@ pub fn run() {
                 floating::setup(app.handle())?;
                 #[cfg(target_os = "windows")]
                 taskbar_widget::setup(app.handle());
+
+                // The plugin restores on window-ready. Reapply once after the
+                // desktop helpers finish initializing so Windows also keeps a
+                // restored maximized state through startup-time window setup.
+                if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
+                    use tauri_plugin_window_state::WindowExt;
+
+                    window.restore_state(
+                        tauri_plugin_window_state::StateFlags::SIZE
+                            | tauri_plugin_window_state::StateFlags::POSITION
+                            | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                    )?;
+                }
             }
             Ok(())
         })

@@ -33,6 +33,8 @@ interface AccountCardProps {
   onToggleAutoWarmup?: () => void;
   warmupFailure?: WarmupFailureInfo;
   onDismissWarmupFailure?: () => void;
+  statsDefaultOpen?: boolean;
+  compact?: boolean;
 }
 
 function formatLastRefresh(date: Date | null, t: TFunction, locale: string): string {
@@ -190,6 +192,8 @@ export function AccountCard({
   onToggleAutoWarmup,
   warmupFailure,
   onDismissWarmupFailure,
+  statsDefaultOpen,
+  compact = false,
 }: AccountCardProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? "en-US";
@@ -200,6 +204,7 @@ export function AccountCard({
   const [editName, setEditName] = useState(account.name);
   const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const managementMenuRef = useRef<HTMLDetailsElement>(null);
   const resetRequestSeq = useRef(0);
 
   useEffect(() => {
@@ -332,7 +337,7 @@ export function AccountCard({
 
   return (
     <div
-      className={`relative rounded-xl border p-5 transition-all duration-200 ${
+      className={`relative rounded-xl border transition-all duration-200 ${compact ? "p-4" : "p-5"} ${
         account.disabled
           ? "border-gray-200 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-950/50"
           : account.is_active
@@ -523,18 +528,18 @@ export function AccountCard({
           <AccountUsageStats
             accountId={account.id}
             enabled
-            defaultOpen={account.is_active}
+            defaultOpen={statsDefaultOpen ?? account.is_active}
             onStatsLoaded={handleStatsLoaded}
           />
         </>
       )}
 
       {/* Actions */}
-      <div className="flex gap-2 mt-3">
+      <div className="mt-3 flex flex-wrap gap-2">
         {account.is_active ? (
           <button
             disabled
-            className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 cursor-default"
+            className="min-w-32 flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 cursor-default"
           >
             ✓ {t("accountCard.active")}
           </button>
@@ -542,7 +547,7 @@ export function AccountCard({
           <button
             onClick={onSwitch}
             disabled={account.disabled || switching || switchDisabled}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
+            className={`min-w-32 flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
               account.disabled || switchDisabled
                 ? "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed"
                 : "bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900"
@@ -615,7 +620,7 @@ export function AccountCard({
         >
           <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
         </button>}
-        {isApiKeyAccount && onEditApiConfig && (
+        {!compact && isApiKeyAccount && onEditApiConfig && (
           <button
             onClick={onEditApiConfig}
             className="px-3 py-2 text-sm rounded-lg bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 transition-colors"
@@ -624,29 +629,82 @@ export function AccountCard({
             ⚙
           </button>
         )}
-        <button
-          onClick={() => void handleToggleDisabled()}
-          disabled={isTogglingDisabled}
-          className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50 ${
-            account.disabled
-              ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
-              : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-          }`}
-          data-tooltip={
-            account.disabled
-              ? t("accountCard.enableAccount")
-              : t("accountCard.disableAccount")
-          }
-        >
-          {account.disabled ? t("accountCard.enable") : t("accountCard.disable")}
-        </button>
-        <button
-          onClick={onDelete}
-          className="px-3 py-2 text-sm rounded-lg bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-300 transition-colors"
-          data-tooltip={t("accountCard.remove")}
-        >
-          ✕
-        </button>
+        {compact ? (
+          <details ref={managementMenuRef} className="relative">
+            <summary
+              className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-lg bg-gray-100 text-gray-600 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 [&::-webkit-details-marker]:hidden"
+              aria-label={t("accountCard.manage")}
+              data-tooltip={t("accountCard.manage")}
+            >
+              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <circle cx="4" cy="10" r="1.4" />
+                <circle cx="10" cy="10" r="1.4" />
+                <circle cx="16" cy="10" r="1.4" />
+              </svg>
+            </summary>
+            <div className="absolute bottom-11 right-0 z-20 w-44 rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl dark:border-gray-700 dark:bg-gray-900">
+              {isApiKeyAccount && onEditApiConfig && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    managementMenuRef.current?.removeAttribute("open");
+                    onEditApiConfig();
+                  }}
+                  className="w-full rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800"
+                >
+                  {t("accountCard.apiConfig")}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  managementMenuRef.current?.removeAttribute("open");
+                  void handleToggleDisabled();
+                }}
+                disabled={isTogglingDisabled}
+                className="w-full rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50 dark:text-gray-200 dark:hover:bg-gray-800"
+              >
+                {account.disabled ? t("accountCard.enableAccount") : t("accountCard.disableAccount")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  managementMenuRef.current?.removeAttribute("open");
+                  onDelete();
+                }}
+                className="w-full rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
+              >
+                {t("accountCard.remove")}
+              </button>
+            </div>
+          </details>
+        ) : (
+          <>
+            <button
+              onClick={() => void handleToggleDisabled()}
+              disabled={isTogglingDisabled}
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50 ${
+                account.disabled
+                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+              }`}
+              data-tooltip={
+                account.disabled
+                  ? t("accountCard.enableAccount")
+                  : t("accountCard.disableAccount")
+              }
+            >
+              {account.disabled ? t("accountCard.enable") : t("accountCard.disable")}
+            </button>
+            <button
+              onClick={onDelete}
+              className="px-3 py-2 text-sm rounded-lg bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-300 transition-colors"
+              data-tooltip={t("accountCard.remove")}
+            >
+              ✕
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

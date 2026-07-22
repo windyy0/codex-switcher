@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAccounts } from "./hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
-import { AccountCard, AddAccountModal, UpdateChecker, requestUpdateCheck } from "./components";
+import { AccountCard, AccountRow, AddAccountModal, UpdateChecker, requestUpdateCheck } from "./components";
 import { SelectMenu } from "./components/SelectMenu";
 import { WindowsDisplaySettings } from "./components/WindowsDisplaySettings";
 import type {
@@ -71,6 +71,7 @@ const WARMUP_SUCCESS_TOAST_DURATION_MS = 2500;
 const WARMUP_NOTIFICATION_COOLDOWN_MS = 30 * 60 * 1000;
 const WARMUP_NOTIFICATION_BATCH_DELAY_MS = 750;
 const LIMIT_FULL_THRESHOLD = 99.5;
+const ACCOUNT_LAYOUT_STORAGE_KEY = "codex-switcher-account-layout";
 const SWITCH_ACCOUNT_BLOCKED_EVENT = "switch-account-blocked";
 const CLOSE_BEHAVIOR_REQUESTED_EVENT = "close-behavior-requested";
 interface SwitchAccountBlockedPayload {
@@ -80,6 +81,16 @@ interface SwitchAccountBlockedPayload {
 interface CloseBehaviorRequestedPayload {
   requestId?: number;
 }
+type AccountStatusFilter = "all" | "available" | "exhausted" | "expiring" | "disabled" | "api";
+type AccountLayoutMode = "list" | "card";
+type OtherAccountsSort =
+  | "recommended"
+  | "deadline_asc"
+  | "deadline_desc"
+  | "remaining_desc"
+  | "remaining_asc"
+  | "subscription_asc"
+  | "subscription_desc";
 type AutoWarmupLedger = Record<
   string,
   {
@@ -98,6 +109,15 @@ const isMacOs =
   typeof navigator !== "undefined" &&
   /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
 const isWindows = isTauriRuntime() && typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
+function readStoredAccountLayout(): AccountLayoutMode {
+  if (typeof window === "undefined") return "list";
+  try {
+    return window.localStorage.getItem(ACCOUNT_LAYOUT_STORAGE_KEY) === "card" ? "card" : "list";
+  } catch {
+    return "list";
+  }
+}
 
 function readStoredStringArray(key: string): string[] {
   if (typeof window === "undefined") return [];
@@ -270,14 +290,11 @@ function App() {
   const [timedWarmupDraft, setTimedWarmupDraft] = useState("");
   const [currentPage, setCurrentPage] = useState<"accounts" | "settings">("accounts");
   const [maskedAccounts, setMaskedAccounts] = useState<Set<string>>(new Set());
-  const [otherAccountsSort, setOtherAccountsSort] = useState<
-    | "deadline_asc"
-    | "deadline_desc"
-    | "remaining_desc"
-    | "remaining_asc"
-    | "subscription_asc"
-    | "subscription_desc"
-  >("deadline_asc");
+  const [otherAccountsSort, setOtherAccountsSort] = useState<OtherAccountsSort>("recommended");
+  const [accountLayout, setAccountLayout] = useState<AccountLayoutMode>(readStoredAccountLayout);
+  const [accountSearch, setAccountSearch] = useState("");
+  const [accountStatusFilter, setAccountStatusFilter] = useState<AccountStatusFilter>("all");
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readStoredTheme);
@@ -302,6 +319,16 @@ function App() {
   // Tracks the last calendar date (YYYY-MM-DD) each scheduled time fired on,
   // so each time triggers at most once per day.
   const timedWarmupLastFireRef = useRef<Record<string, string>>(readStoredTimedWarmupLedger());
+
+  const changeAccountLayout = (layout: AccountLayoutMode) => {
+    setAccountLayout(layout);
+    setSelectedAccountId(null);
+    try {
+      window.localStorage.setItem(ACCOUNT_LAYOUT_STORAGE_KEY, layout);
+    } catch {
+      // Keep the in-memory choice even when local persistence is unavailable.
+    }
+  };
 
   useEffect(() => {
     accountsRef.current = accounts;
@@ -526,6 +553,20 @@ function App() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isActionsMenuOpen]);
+
+  useEffect(() => {
+    if (!selectedAccountId) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedAccountId(null);
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedAccountId]);
 
   useEffect(() => {
     applyTheme(themeMode);
@@ -1491,6 +1532,7 @@ function App() {
 
   const activeAccount = accounts.find((a) => a.is_active);
   const otherAccounts = accounts.filter((a) => !a.is_active);
+  const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null;
   const hasRunningProcesses = processInfo && processInfo.count > 0;
   const pendingTraySwitchAccount = useMemo(
     () => accounts.find((account) => account.id === pendingTraySwitchAccountId),
@@ -1529,6 +1571,32 @@ function App() {
     };
 
     return [...otherAccounts].sort((a, b) => {
+      if (otherAccountsSort === "recommended") {
+        const getRecommendationBucket = (account: AccountWithUsage) => {
+          if (account.disabled) return 4;
+          if (account.auth_mode === "api_key") return 3;
+          const used = account.usage?.secondary_used_percent ?? account.usage?.primary_used_percent;
+          if (used === null || used === undefined) return 1;
+          if (isLimitFull(used)) return 2;
+          return 0;
+        };
+        const bucketDiff = getRecommendationBucket(a) - getRecommendationBucket(b);
+        if (bucketDiff !== 0) return bucketDiff;
+
+        const remainingDiff =
+          getRemainingPercent(b.usage?.secondary_used_percent ?? b.usage?.primary_used_percent) -
+          getRemainingPercent(a.usage?.secondary_used_percent ?? a.usage?.primary_used_percent);
+        if (remainingDiff !== 0) return remainingDiff;
+
+        const subscriptionDiff = compareOptionalNumber(
+          getSubscriptionDeadline(a.subscription_expires_at),
+          getSubscriptionDeadline(b.subscription_expires_at),
+          "asc"
+        );
+        if (subscriptionDiff !== 0) return subscriptionDiff;
+        return a.name.localeCompare(b.name);
+      }
+
       if (
         otherAccountsSort === "subscription_asc" ||
         otherAccountsSort === "subscription_desc"
@@ -1584,66 +1652,253 @@ function App() {
     });
   }, [otherAccounts, otherAccountsSort]);
 
+  const accountMatchesView = useCallback((account: AccountWithUsage) => {
+    const query = accountSearch.trim().toLocaleLowerCase();
+    const isExpiringSoon = (expiresAt: string | null | undefined) => {
+      if (!expiresAt) return false;
+      const timestamp = new Date(expiresAt).getTime();
+      return !Number.isNaN(timestamp) && timestamp - Date.now() <= 7 * 24 * 60 * 60 * 1000;
+    };
+    const getKnownUsedPercent = (account: AccountWithUsage) => {
+      if (!account.usage || account.usage.error) return null;
+      return account.usage.secondary_used_percent ?? account.usage.primary_used_percent ?? null;
+    };
+    const isExhausted = (account: AccountWithUsage) =>
+      isLimitFull(getKnownUsedPercent(account));
+
+    const matchesSearch =
+      query.length === 0 ||
+      [account.name, account.email, account.plan_type]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLocaleLowerCase().includes(query));
+    if (!matchesSearch) return false;
+
+    switch (accountStatusFilter) {
+      case "available":
+        return (
+          !account.disabled &&
+          account.auth_mode === "chat_g_p_t" &&
+          getKnownUsedPercent(account) !== null &&
+          !isExhausted(account)
+        );
+      case "exhausted":
+        return !account.disabled && account.auth_mode === "chat_g_p_t" && isExhausted(account);
+      case "expiring":
+        return isExpiringSoon(account.subscription_expires_at);
+      case "disabled":
+        return account.disabled;
+      case "api":
+        return account.auth_mode === "api_key";
+      default:
+        return true;
+    }
+  }, [accountSearch, accountStatusFilter]);
+
+  const visibleOtherAccounts = useMemo(
+    () => sortedOtherAccounts.filter(accountMatchesView),
+    [accountMatchesView, sortedOtherAccounts]
+  );
+
+  const windowControls = !isMacOs ? (
+    <div className="flex shrink-0 items-center gap-1">
+      <button
+        onClick={() => {
+          void appWindow.minimize();
+        }}
+        className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+        data-tooltip={t("window.minimize")}
+        data-tooltip-placement="bottom"
+      >
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M5 12h14" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      </button>
+      <button
+        onClick={() => {
+          void appWindow.toggleMaximize();
+        }}
+        className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+        data-tooltip={isWindowMaximized ? t("window.restore") : t("window.maximize")}
+        data-tooltip-placement="bottom"
+      >
+        {isWindowMaximized ? (
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M9 9h10v10H9z" strokeWidth="2" />
+            <path d="M5 15V5h10" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <rect x="5" y="5" width="14" height="14" strokeWidth="2" />
+          </svg>
+        )}
+      </button>
+      <button
+        onClick={() => {
+          void appWindow.close();
+        }}
+        className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-500 hover:text-white dark:text-gray-400 dark:hover:bg-red-500 dark:hover:text-white"
+        data-tooltip={t("window.close")}
+        data-tooltip-placement="bottom"
+      >
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      </button>
+    </div>
+  ) : null;
+
+  const accountLayoutToggle = (
+    <div
+      className="inline-flex shrink-0 rounded-xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-950"
+      role="group"
+      aria-label={t("accounts.layout")}
+    >
+      <button
+        type="button"
+        onClick={() => changeAccountLayout("list")}
+        aria-pressed={accountLayout === "list"}
+        aria-label={t("accounts.layoutList")}
+        data-tooltip={t("accounts.layoutList")}
+        className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
+          accountLayout === "list"
+            ? "bg-gray-900 text-white shadow-sm dark:bg-gray-100 dark:text-gray-900"
+            : "text-gray-500 hover:bg-white dark:text-gray-400 dark:hover:bg-gray-800"
+        }`}
+      >
+        <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+          <path d="M6.5 5h9M6.5 10h9M6.5 15h9" strokeLinecap="round" />
+          <circle cx="3.5" cy="5" r=".75" fill="currentColor" stroke="none" />
+          <circle cx="3.5" cy="10" r=".75" fill="currentColor" stroke="none" />
+          <circle cx="3.5" cy="15" r=".75" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        onClick={() => changeAccountLayout("card")}
+        aria-pressed={accountLayout === "card"}
+        aria-label={t("accounts.layoutCard")}
+        data-tooltip={t("accounts.layoutCard")}
+        className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
+          accountLayout === "card"
+            ? "bg-gray-900 text-white shadow-sm dark:bg-gray-100 dark:text-gray-900"
+            : "text-gray-500 hover:bg-white dark:text-gray-400 dark:hover:bg-gray-800"
+        }`}
+      >
+        <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+          <rect x="3" y="3" width="5.5" height="5.5" rx="1" />
+          <rect x="11.5" y="3" width="5.5" height="5.5" rx="1" />
+          <rect x="3" y="11.5" width="5.5" height="5.5" rx="1" />
+          <rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1" />
+        </svg>
+      </button>
+    </div>
+  );
+
+  const accountBrowserToolbar = (
+    <div className="mb-3 rounded-2xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center">
+        <div className="relative min-w-0 flex-1">
+          <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+          </svg>
+          <input
+            type="search"
+            value={accountSearch}
+            onChange={(event) => setAccountSearch(event.target.value)}
+            placeholder={t("accounts.searchPlaceholder")}
+            aria-label={t("accounts.searchPlaceholder")}
+            className="h-10 w-full rounded-xl border border-gray-200 bg-gray-50 pl-9 pr-3 text-sm text-gray-900 outline-none transition-shadow placeholder:text-gray-400 focus:border-gray-300 focus:ring-2 focus:ring-gray-200 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-gray-600 dark:focus:ring-gray-800"
+          />
+        </div>
+
+        <div className="min-w-0 flex-1 md:flex-none">
+          <SelectMenu
+            id="other-accounts-sort"
+            value={otherAccountsSort}
+            onChange={(value) => setOtherAccountsSort(value as OtherAccountsSort)}
+            ariaLabel={t("accounts.sort")}
+            options={[
+              { value: "recommended", label: t("accounts.sortRecommended") },
+              { value: "deadline_asc", label: t("accounts.sortResetAsc") },
+              { value: "deadline_desc", label: t("accounts.sortResetDesc") },
+              { value: "remaining_desc", label: t("accounts.sortRemainingDesc") },
+              { value: "remaining_asc", label: t("accounts.sortRemainingAsc") },
+              { value: "subscription_asc", label: t("accounts.sortExpiryAsc") },
+              { value: "subscription_desc", label: t("accounts.sortExpiryDesc") },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div className="mt-3 flex gap-2 overflow-x-auto pb-0.5">
+        {([
+          ["all", t("accounts.filterAll")],
+          ["available", t("accounts.filterAvailable")],
+          ["exhausted", t("accounts.filterExhausted")],
+          ["expiring", t("accounts.filterExpiring")],
+          ["disabled", t("accounts.filterDisabled")],
+          ["api", t("accounts.filterApi")],
+        ] as Array<[AccountStatusFilter, string]>).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setAccountStatusFilter(value)}
+            className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              accountStatusFilter === value
+                ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderAccountManagementCard = (account: AccountWithUsage) => (
+    <AccountCard
+      key={account.id}
+      account={account}
+      onSwitch={() => {
+        if (!account.is_active) void handleSwitch(account.id);
+      }}
+      onWarmup={() => handleWarmupAccount(account.id, account.name)}
+      onDelete={() => handleDelete(account.id)}
+      onRefresh={() => refreshSingleUsage(account.id, { refreshMetadata: true })}
+      onRename={(newName) => renameAccount(account.id, newName)}
+      onToggleDisabled={() => setAccountDisabled(account.id, !account.disabled)}
+      onEditApiConfig={() => void openApiConfig(account)}
+      switching={switchingId === account.id}
+      switchDisabled={hasRunningProcesses ?? false}
+      warmingUp={
+        isWarmingAll ||
+        warmingUpId === account.id ||
+        autoWarmupRunningIds.has(account.id)
+      }
+      masked={maskedAccounts.has(account.id)}
+      onToggleMask={() => toggleMask(account.id)}
+      autoWarmupEnabled={autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id)}
+      autoWarmupManagedByAll={autoWarmupAllEnabled}
+      autoWarmupLabel={getAutoWarmupLabel(
+        account.usage,
+        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id),
+        autoWarmupRunningIds.has(account.id)
+      )}
+      onToggleAutoWarmup={() => toggleAutoWarmupAccount(account.id)}
+      warmupFailure={warmupFailures[account.id]}
+      onDismissWarmupFailure={() => dismissWarmupFailure(account.id)}
+      statsDefaultOpen={false}
+      compact
+    />
+  );
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
       <header className="sticky top-0 z-40 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
-        <div className="flex h-9 items-center bg-white px-3 dark:bg-gray-900">
-          <div
-            onMouseDown={handleTitlebarDrag}
-            onDoubleClick={handleTitlebarDoubleClick}
-            className={`h-full flex-1 select-none cursor-default ${isMacOs ? "ml-18 mr-2" : "mr-3"}`}
-          />
-          {!isMacOs && (
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  void appWindow.minimize();
-                }}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-                data-tooltip={t("window.minimize")}
-                data-tooltip-placement="bottom"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M5 12h14" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </button>
-              <button
-                onClick={() => {
-                  void appWindow.toggleMaximize();
-                }}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-                data-tooltip={isWindowMaximized ? t("window.restore") : t("window.maximize")}
-                data-tooltip-placement="bottom"
-              >
-                {isWindowMaximized ? (
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path d="M9 9h10v10H9z" strokeWidth="2" />
-                    <path d="M5 15V5h10" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                ) : (
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <rect x="5" y="5" width="14" height="14" strokeWidth="2" />
-                  </svg>
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  void appWindow.close();
-                }}
-                className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-500 hover:text-white dark:text-gray-400 dark:hover:bg-red-500 dark:hover:text-white"
-                data-tooltip={t("window.close")}
-                data-tooltip-placement="bottom"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-          )}
-        </div>
-
         {currentPage === "settings" ? (
-          <div className="mx-auto flex max-w-5xl items-center gap-3 px-6 py-4">
+          <div className={`mx-auto flex min-h-14 max-w-5xl items-center gap-3 px-3 py-2 ${isMacOs ? "pl-20" : ""}`}>
             <button
               onClick={() => setCurrentPage("accounts")}
               className="group inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-100"
@@ -1656,20 +1911,33 @@ function App() {
               </svg>
             </button>
             <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-gray-100">{t("settings.title")}</h1>
+            <div
+              onMouseDown={handleTitlebarDrag}
+              onDoubleClick={handleTitlebarDoubleClick}
+              className="h-10 min-w-6 flex-1 select-none cursor-default"
+            />
+            {windowControls}
           </div>
         ) : (
-        <div className="max-w-5xl mx-auto px-6 py-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">
-                    Codex Switcher
-                  </h1>
-                  {processInfo && (
-                    <div className="inline-flex items-center gap-1">
+          <div className={`mx-auto max-w-5xl px-3 ${isMacOs ? "pl-20" : ""}`}>
+            <div className="flex h-12 items-center gap-3">
+              <h1 className="shrink-0 text-xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
+                Codex Switcher
+              </h1>
+              <div
+                onMouseDown={handleTitlebarDrag}
+                onDoubleClick={handleTitlebarDoubleClick}
+                className="h-10 min-w-4 flex-1 cursor-default select-none"
+              />
+              {windowControls}
+            </div>
+
+            <div className="flex min-h-14 items-center gap-2 border-t border-gray-100 dark:border-gray-800">
+              <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                {processInfo && (
+                    <div className="inline-flex shrink-0 items-center gap-1">
                       <span
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border ${hasRunningProcesses
+                        className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-0.5 rounded-md text-xs border ${hasRunningProcesses
                             ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700"
                             : "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-700"
                           }`}
@@ -1691,34 +1959,32 @@ function App() {
                             setForceCloseConfirmOpen(true);
                           }}
                           disabled={isForceClosingCodex}
-                          className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
+                          className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
                           data-tooltip={t("header.forceCloseTitle")}
                         >
                           {t("header.forceClose")}
                         </button>
                       )}
                     </div>
-                  )}
-                  {isTauriRuntime() && processInfo && !hasRunningProcesses && (
+                )}
+                {isTauriRuntime() && processInfo && !hasRunningProcesses && (
                     <button
                       onClick={handleOpenCodexApp}
                       disabled={isOpeningCodex}
-                      className="inline-flex items-center rounded-md border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100 disabled:opacity-50 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/30"
+                      className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100 disabled:opacity-50 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/30"
                       data-tooltip={t("header.openCodex")}
                     >
                       {isOpeningCodex ? t("header.opening") : t("header.openCodex")}
                     </button>
-                  )}
-                </div>
+                )}
               </div>
-            </div>
 
-            <div className="flex flex-wrap items-center gap-2 shrink-0 md:ml-4 md:w-max md:flex-nowrap md:justify-end">
+              <div className="flex shrink-0 items-center justify-end gap-1">
               {currentPage === "accounts" && (
                 <>
               <button
                 onClick={toggleMaskAll}
-                className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
+                className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                 data-tooltip={allMasked ? t("header.showAll") : t("header.hideAll")}
               >
                 {allMasked ? (
@@ -1745,7 +2011,7 @@ function App() {
                     (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
                   )
                 }
-                className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
+                className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                 data-tooltip={isRefreshing ? t("header.refreshingAll") : t("header.refreshAll")}
               >
                 <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
@@ -1758,7 +2024,7 @@ function App() {
                     (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
                   )
                 }
-                className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
+                className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                 data-tooltip={t("header.warmupAll")}
               >
                 <span className={isWarmingAll ? "animate-pulse" : ""}>⚡</span>
@@ -1767,7 +2033,7 @@ function App() {
               )}
               <button
                 onClick={() => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"))}
-                className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-lg text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
+                className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-lg text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                 data-tooltip={themeMode === "dark" ? t("header.lightMode") : t("header.darkMode")}
               >
                 {themeMode === "dark" ? "☀" : "☾"}
@@ -1778,7 +2044,7 @@ function App() {
                   setIsActionsMenuOpen(false);
                   setCurrentPage("settings");
                 }}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                 data-tooltip={t("settings.title")}
                 aria-label={t("settings.title")}
               >
@@ -1792,7 +2058,7 @@ function App() {
               <div className="relative" ref={actionsMenuRef}>
                 <button
                   onClick={() => setIsActionsMenuOpen((prev) => !prev)}
-                  className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white transition-colors hover:bg-gray-800 dark:bg-black dark:hover:bg-neutral-900 shrink-0 whitespace-nowrap"
+                  className="h-9 shrink-0 whitespace-nowrap rounded-lg bg-gray-900 px-2 text-sm font-medium text-white transition-colors hover:bg-gray-800 dark:bg-black dark:hover:bg-neutral-900"
                 >
                   {t("header.accountMenu")} ▾
                 </button>
@@ -1851,6 +2117,7 @@ function App() {
                 )}
               </div>
               )}
+              {accountLayoutToggle}
             </div>
           </div>
         </div>
@@ -1858,7 +2125,7 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-6 py-8">
+      <main className="mx-auto max-w-5xl px-4 py-5 sm:px-6">
         {currentPage === "settings" ? (
           <div className="mx-auto max-w-3xl space-y-6">
             <section>
@@ -2060,143 +2327,196 @@ function App() {
             </button>
           </div>
         ) : (
-          <div className="space-y-8">
-            {/* Active Account */}
-            {activeAccount && (
-              <section>
-                <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
-                  {t("accounts.activeHeading")}
-                </h2>
-                <AccountCard
-                  account={activeAccount}
-                  onSwitch={() => { }}
-                  onWarmup={() =>
-                    handleWarmupAccount(activeAccount.id, activeAccount.name)
-                  }
-                  onDelete={() => handleDelete(activeAccount.id)}
-                  onRefresh={() =>
-                    refreshSingleUsage(activeAccount.id, { refreshMetadata: true })
-                  }
-                  onRename={(newName) => renameAccount(activeAccount.id, newName)}
-                  onToggleDisabled={() =>
-                    setAccountDisabled(activeAccount.id, !activeAccount.disabled)
-                  }
-                  onEditApiConfig={() => void openApiConfig(activeAccount)}
-                  switching={switchingId === activeAccount.id}
-                  switchDisabled={hasRunningProcesses ?? false}
-                  warmingUp={
-                    isWarmingAll ||
-                    warmingUpId === activeAccount.id ||
-                    autoWarmupRunningIds.has(activeAccount.id)
-                  }
-                  masked={maskedAccounts.has(activeAccount.id)}
-                  onToggleMask={() => toggleMask(activeAccount.id)}
-                  autoWarmupEnabled={
-                    autoWarmupAllEnabled || autoWarmupAccountIds.has(activeAccount.id)
-                  }
-                  autoWarmupManagedByAll={autoWarmupAllEnabled}
-                  autoWarmupLabel={getAutoWarmupLabel(
-                    activeAccount.usage,
-                    autoWarmupAllEnabled || autoWarmupAccountIds.has(activeAccount.id),
-                    autoWarmupRunningIds.has(activeAccount.id)
-                  )}
-                  onToggleAutoWarmup={() => toggleAutoWarmupAccount(activeAccount.id)}
-                  warmupFailure={warmupFailures[activeAccount.id]}
-                  onDismissWarmupFailure={() =>
-                    dismissWarmupFailure(activeAccount.id)
-                  }
-                />
-              </section>
-            )}
+          <div className="space-y-6">
+            {accountLayout === "card" ? (
+              <>
+                {activeAccount && (
+                  <section>
+                    <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                      {t("accounts.activeHeading")}
+                    </h2>
+                    {renderAccountManagementCard(activeAccount)}
+                  </section>
+                )}
 
-            {/* Other Accounts */}
-            {otherAccounts.length > 0 && (
-              <section>
-                <div className="flex items-center justify-between gap-3 mb-4">
-                  <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    {t("accounts.otherHeading", { count: otherAccounts.length })}
-                  </h2>
-                  <div className="flex items-center gap-2">
-                    <label htmlFor="other-accounts-sort" className="text-xs text-gray-500 dark:text-gray-400">
-                      {t("accounts.sort")}
-                    </label>
-                    <div>
-                      <SelectMenu
-                        id="other-accounts-sort"
-                        value={otherAccountsSort}
-                        onChange={(value) =>
-                          setOtherAccountsSort(
-                            value as
-                              | "deadline_asc"
-                              | "deadline_desc"
-                              | "remaining_desc"
-                              | "remaining_asc"
-                              | "subscription_asc"
-                              | "subscription_desc"
-                          )
+                {otherAccounts.length > 0 && (
+                  <section>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        {t("accounts.otherHeading", { count: otherAccounts.length })}
+                      </h2>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">
+                        {t("accounts.showing", { visible: visibleOtherAccounts.length, total: otherAccounts.length })}
+                      </span>
+                    </div>
+                    {accountBrowserToolbar}
+                    {visibleOtherAccounts.length > 0 ? (
+                      <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2">
+                        {visibleOtherAccounts.map(renderAccountManagementCard)}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white px-6 py-14 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                        <svg className="mb-3 h-8 w-8 text-gray-300 dark:text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                          <circle cx="11" cy="11" r="7" />
+                          <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+                        </svg>
+                        <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t("accounts.noMatches")}</p>
+                        <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">{t("accounts.noMatchesHint")}</p>
+                      </div>
+                    )}
+                  </section>
+                )}
+              </>
+            ) : (
+              <>
+                {activeAccount && (
+                  <section>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        {t("accounts.activeHeading")}
+                      </h2>
+                    </div>
+                    <div className="overflow-hidden rounded-2xl border border-emerald-300 bg-white shadow-sm dark:border-emerald-800 dark:bg-gray-900">
+                      <AccountRow
+                        account={activeAccount}
+                        onSwitch={() => { }}
+                        onWarmup={() => handleWarmupAccount(activeAccount.id, activeAccount.name)}
+                        onRefresh={() => refreshSingleUsage(activeAccount.id, { refreshMetadata: true })}
+                        onEnable={() => setAccountDisabled(activeAccount.id, false)}
+                        onOpenDetails={() => setSelectedAccountId(activeAccount.id)}
+                        switching={switchingId === activeAccount.id}
+                        switchDisabled={hasRunningProcesses ?? false}
+                        warmingUp={
+                          isWarmingAll ||
+                          warmingUpId === activeAccount.id ||
+                          autoWarmupRunningIds.has(activeAccount.id)
                         }
-                        ariaLabel={t("accounts.sort")}
-                        options={[
-                          { value: "deadline_asc", label: t("accounts.sortResetAsc") },
-                          { value: "deadline_desc", label: t("accounts.sortResetDesc") },
-                          { value: "remaining_desc", label: t("accounts.sortRemainingDesc") },
-                          { value: "remaining_asc", label: t("accounts.sortRemainingAsc") },
-                          { value: "subscription_asc", label: t("accounts.sortExpiryAsc") },
-                          { value: "subscription_desc", label: t("accounts.sortExpiryDesc") },
-                        ]}
+                        masked={maskedAccounts.has(activeAccount.id)}
                       />
                     </div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {sortedOtherAccounts.map((account) => (
-                    <AccountCard
-                      key={account.id}
-                      account={account}
-                      onSwitch={() => handleSwitch(account.id)}
-                      onWarmup={() => handleWarmupAccount(account.id, account.name)}
-                      onDelete={() => handleDelete(account.id)}
-                      onRefresh={() =>
-                        refreshSingleUsage(account.id, { refreshMetadata: true })
-                      }
-                      onRename={(newName) => renameAccount(account.id, newName)}
-                      onToggleDisabled={() =>
-                        setAccountDisabled(account.id, !account.disabled)
-                      }
-                      onEditApiConfig={() => void openApiConfig(account)}
-                      switching={switchingId === account.id}
-                      switchDisabled={hasRunningProcesses ?? false}
-                      warmingUp={
-                        isWarmingAll ||
-                        warmingUpId === account.id ||
-                        autoWarmupRunningIds.has(account.id)
-                      }
-                      masked={maskedAccounts.has(account.id)}
-                      onToggleMask={() => toggleMask(account.id)}
-                      autoWarmupEnabled={
-                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id)
-                      }
-                      autoWarmupManagedByAll={autoWarmupAllEnabled}
-                      autoWarmupLabel={getAutoWarmupLabel(
-                        account.usage,
-                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id),
-                        autoWarmupRunningIds.has(account.id)
+                  </section>
+                )}
+
+                {otherAccounts.length > 0 && (
+                  <section>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        {t("accounts.otherHeading", { count: otherAccounts.length })}
+                      </h2>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">
+                        {t("accounts.showing", { visible: visibleOtherAccounts.length, total: otherAccounts.length })}
+                      </span>
+                    </div>
+                    {accountBrowserToolbar}
+                    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                      {visibleOtherAccounts.length > 0 ? visibleOtherAccounts.map((account) => (
+                        <AccountRow
+                          key={account.id}
+                          account={account}
+                          onSwitch={() => handleSwitch(account.id)}
+                          onWarmup={() => handleWarmupAccount(account.id, account.name)}
+                          onRefresh={() => refreshSingleUsage(account.id, { refreshMetadata: true })}
+                          onEnable={() => setAccountDisabled(account.id, false)}
+                          onOpenDetails={() => setSelectedAccountId(account.id)}
+                          switching={switchingId === account.id}
+                          switchDisabled={hasRunningProcesses ?? false}
+                          warmingUp={
+                            isWarmingAll ||
+                            warmingUpId === account.id ||
+                            autoWarmupRunningIds.has(account.id)
+                          }
+                          masked={maskedAccounts.has(account.id)}
+                        />
+                      )) : (
+                        <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
+                          <svg className="mb-3 h-8 w-8 text-gray-300 dark:text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                            <circle cx="11" cy="11" r="7" />
+                            <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+                          </svg>
+                          <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t("accounts.noMatches")}</p>
+                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">{t("accounts.noMatchesHint")}</p>
+                        </div>
                       )}
-                      onToggleAutoWarmup={() => toggleAutoWarmupAccount(account.id)}
-                      warmupFailure={warmupFailures[account.id]}
-                      onDismissWarmupFailure={() =>
-                        dismissWarmupFailure(account.id)
-                      }
-                    />
-                  ))}
-                </div>
-              </section>
+                    </div>
+                  </section>
+                )}
+              </>
             )}
           </div>
         )}
           </>
         )}
       </main>
+
+      {currentPage === "accounts" && accountLayout === "list" && selectedAccount && (
+        <div className="fixed inset-0 z-[45] flex justify-end" role="dialog" aria-modal="true" aria-labelledby="account-details-title">
+          <button
+            type="button"
+            className="absolute inset-0 bg-gray-950/35 backdrop-blur-[1px]"
+            onClick={() => setSelectedAccountId(null)}
+            aria-label={t("common.close")}
+          />
+          <aside className="relative flex h-full w-full max-w-xl flex-col border-l border-gray-200 bg-gray-50 shadow-2xl dark:border-gray-800 dark:bg-gray-950">
+            <div className="sticky top-0 z-10 flex h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white px-5 dark:border-gray-800 dark:bg-gray-900">
+              <div className="min-w-0">
+                <div id="account-details-title" className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  {t("accounts.details")}
+                </div>
+                <div className={`mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400 ${maskedAccounts.has(selectedAccount.id) ? "select-none blur-sm" : ""}`}>
+                  {selectedAccount.name}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedAccountId(null)}
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                aria-label={t("common.close")}
+                data-tooltip={t("common.close")}
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <AccountCard
+                account={selectedAccount}
+                onSwitch={() => {
+                  if (!selectedAccount.is_active) void handleSwitch(selectedAccount.id);
+                }}
+                onWarmup={() => handleWarmupAccount(selectedAccount.id, selectedAccount.name)}
+                onDelete={() => handleDelete(selectedAccount.id)}
+                onRefresh={() => refreshSingleUsage(selectedAccount.id, { refreshMetadata: true })}
+                onRename={(newName) => renameAccount(selectedAccount.id, newName)}
+                onToggleDisabled={() => setAccountDisabled(selectedAccount.id, !selectedAccount.disabled)}
+                onEditApiConfig={() => void openApiConfig(selectedAccount)}
+                switching={switchingId === selectedAccount.id}
+                switchDisabled={hasRunningProcesses ?? false}
+                warmingUp={
+                  isWarmingAll ||
+                  warmingUpId === selectedAccount.id ||
+                  autoWarmupRunningIds.has(selectedAccount.id)
+                }
+                masked={maskedAccounts.has(selectedAccount.id)}
+                onToggleMask={() => toggleMask(selectedAccount.id)}
+                autoWarmupEnabled={
+                  autoWarmupAllEnabled || autoWarmupAccountIds.has(selectedAccount.id)
+                }
+                autoWarmupManagedByAll={autoWarmupAllEnabled}
+                autoWarmupLabel={getAutoWarmupLabel(
+                  selectedAccount.usage,
+                  autoWarmupAllEnabled || autoWarmupAccountIds.has(selectedAccount.id),
+                  autoWarmupRunningIds.has(selectedAccount.id)
+                )}
+                onToggleAutoWarmup={() => toggleAutoWarmupAccount(selectedAccount.id)}
+                warmupFailure={warmupFailures[selectedAccount.id]}
+                onDismissWarmupFailure={() => dismissWarmupFailure(selectedAccount.id)}
+                statsDefaultOpen={false}
+              />
+            </div>
+          </aside>
+        </div>
+      )}
 
       {/* Refresh Success Toast */}
       {refreshSuccess && (
