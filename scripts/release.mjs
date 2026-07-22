@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { finalizeUnreleasedSection } from "./release-notes.mjs";
 
 const root = process.cwd();
 const input = process.argv[2];
@@ -17,6 +18,8 @@ const VERSION_FILES = [
   "src-tauri/Cargo.toml",
   "src-tauri/Cargo.lock",
 ];
+const CHANGELOG_FILE = "CHANGELOG.md";
+const RELEASE_FILES = [...VERSION_FILES, CHANGELOG_FILE];
 
 const readFile = (relativePath) =>
   fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -86,6 +89,12 @@ const assertVersionsMatch = (expectedVersion) => {
   }
 };
 
+const finalizeChangelog = (version) => {
+  const contents = readFile(CHANGELOG_FILE);
+  const updatedContents = finalizeUnreleasedSection(contents, version);
+  fs.writeFileSync(path.join(root, CHANGELOG_FILE), updatedContents, "utf8");
+};
+
 const currentVersion = parsePackageVersion(readFile("package.json"));
 if (!currentVersion) {
   console.error("Could not determine current version from package.json");
@@ -102,8 +111,12 @@ if (!nextVersion) {
 }
 
 assertVersionsMatch(nextVersion);
+finalizeChangelog(nextVersion);
+const releaseNotes = capture("node", ["scripts/release-notes.mjs", nextVersion]);
+console.log("Release highlights:");
+console.log(releaseNotes);
 
-run("git", ["add", ...VERSION_FILES]);
+run("git", ["add", ...RELEASE_FILES]);
 run("git", ["commit", "-m", `chore: release ${nextVersion}`]);
 run("git", ["tag", "-a", `v${nextVersion}`, "-m", `v${nextVersion}`]);
 

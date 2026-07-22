@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
-import { isTauriRuntime } from "../lib/platform";
+import { isTauriRuntime, openExternalUrl } from "../lib/platform";
 import { useTranslation } from "react-i18next";
 
 type UpdateStatus =
@@ -14,6 +14,19 @@ type UpdateStatus =
 
 const MANUAL_UPDATE_CHECK_EVENT = "codex-switcher:check-for-update";
 const IGNORED_UPDATE_VERSION_STORAGE_KEY = "codex-switcher:ignored-update-version";
+const FULL_CHANGELOG_URL = "https://github.com/windyy0/codex-switcher/blob/main/CHANGELOG.md";
+
+function formatReleaseHighlights(body: string): string {
+  return body
+    .trim()
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/^\s*[-*]\s+/, "• ")
+    )
+    .join("\n");
+}
 
 function getIgnoredUpdateVersion(): string | null {
   try {
@@ -138,6 +151,12 @@ export function UpdateChecker() {
     }
   };
 
+  const handleOpenFullChangelog = () => {
+    void openExternalUrl(FULL_CHANGELOG_URL).catch((err) => {
+      console.error("Failed to open changelog:", err);
+    });
+  };
+
   if (!isTauriRuntime()) {
     return null;
   }
@@ -153,7 +172,7 @@ export function UpdateChecker() {
   };
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-md w-full px-4">
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-xl w-full px-4">
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-4">
         {status.kind === "checking" && (
           <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{t("updates.checking")}</p>
@@ -167,36 +186,57 @@ export function UpdateChecker() {
         )}
 
         {status.kind === "available" && (
-          <div className="flex items-start gap-3">
-            <div className="flex-1 min-w-0">
+          <div className="space-y-4">
+            <div>
               <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
                 {t("updates.available", { version: status.update.version })}
               </p>
-              {status.update.body && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
-                  {status.update.body}
-                </p>
-              )}
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {t("updates.versionTransition", {
+                  current: status.update.currentVersion,
+                  latest: status.update.version,
+                })}
+              </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+
+            <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-950/50">
+              <p className="mb-2 text-xs font-medium text-gray-700 dark:text-gray-200">
+                {t("updates.highlights")}
+              </p>
+              <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-gray-600 dark:text-gray-300">
+                {status.update.body
+                  ? formatReleaseHighlights(status.update.body)
+                  : t("updates.noReleaseNotes")}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <button
-                onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+                onClick={handleOpenFullChangelog}
+                className="text-xs font-medium text-blue-600 transition-colors hover:text-blue-700 hover:underline dark:text-blue-400 dark:hover:text-blue-300"
               >
-                {t("common.later")}
+                {t("updates.viewFullChangelog")} ↗
               </button>
-              <button
-                onClick={handleIgnoreVersion}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
-              >
-                {t("updates.ignoreVersion")}
-              </button>
-              <button
-                onClick={handleDownloadAndInstall}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
-              >
-                {t("updates.update")}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setDismissed(true)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+                >
+                  {t("common.later")}
+                </button>
+                <button
+                  onClick={handleIgnoreVersion}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+                >
+                  {t("updates.ignoreVersion")}
+                </button>
+                <button
+                  onClick={handleDownloadAndInstall}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
+                >
+                  {t("updates.update")}
+                </button>
+              </div>
             </div>
           </div>
         )}
