@@ -23,7 +23,7 @@ use commands::{
     check_codex_processes, complete_close_behavior, complete_login, delete_account,
     detect_local_auth_json, export_accounts_full_encrypted_file, export_accounts_slim_text,
     get_account_usage_stats, get_active_account_info, get_api_account_config, get_app_language,
-    get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage, hide_tray_window,
+    get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage,
     import_accounts_full_encrypted_file, import_accounts_slim_text, kill_codex_processes,
     list_accounts, open_main_window, quit_app, refresh_account_metadata,
     refresh_all_accounts_usage, rename_account, report_usage, set_account_disabled,
@@ -143,8 +143,7 @@ pub fn run() {
             // Process detection
             check_codex_processes,
             kill_codex_processes,
-            // Tray window
-            hide_tray_window,
+            // Tray integration
             open_main_window,
             quit_app,
             report_usage,

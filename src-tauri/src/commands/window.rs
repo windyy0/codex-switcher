@@ -11,8 +11,6 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::auth::{load_app_settings, save_app_settings};
 use crate::types::{DockDisplayMode, UsageInfo};
 
-/// Label of the borderless tray popup window.
-pub const TRAY_WINDOW: &str = "tray";
 pub const CLOSE_BEHAVIOR_REQUESTED_EVENT: &str = "close-behavior-requested";
 
 #[cfg(target_os = "macos")]
@@ -35,15 +33,7 @@ pub fn report_usage(app: AppHandle, usages: Vec<UsageInfo>) {
     let _ = (app, usages);
 }
 
-/// Hide the tray popup window (called by the tray UI after an action).
-#[tauri::command]
-pub fn hide_tray_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window(TRAY_WINDOW) {
-        let _ = window.hide();
-    }
-}
-
-/// Bring the main window to the foreground and hide the tray popup.
+/// Bring the main window to the foreground.
 #[tauri::command]
 pub fn open_main_window(app: AppHandle) {
     restore_main_window(&app);
@@ -81,13 +71,10 @@ pub fn schedule_close_behavior_prompt_fallback<R: Runtime>(app: AppHandle<R>, re
     });
 }
 
-/// Bring the main window to the foreground and hide the tray popup.
+/// Bring the main window to the foreground.
 pub fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "macos")]
     let _ = app.show();
-    if let Some(tray) = app.get_webview_window(TRAY_WINDOW) {
-        let _ = tray.hide();
-    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();

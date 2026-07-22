@@ -2,6 +2,13 @@
 
 use std::process::Command;
 
+#[cfg(windows)]
+use std::{
+    io::Read,
+    process::{Output, Stdio},
+    time::{Duration, Instant},
+};
+
 #[cfg(any(windows, test))]
 use anyhow::Context;
 
@@ -90,10 +97,6 @@ pub(crate) fn ensure_codex_not_running() -> Result<(), String> {
         pids.len(),
         if pids.len() == 1 { " is" } else { "es are" }
     ))
-}
-
-pub(crate) fn is_codex_running_switch_block(error: &str) -> bool {
-    error.starts_with(CODEX_RUNNING_SWITCH_BLOCKED_PREFIX)
 }
 
 /// Force-close active Codex processes that currently block account switching.
@@ -542,44 +545,24 @@ fn read_macos_app_bundle_identifier(command: &str, process_name: Option<&str>) -
 
 #[cfg(windows)]
 fn find_windows_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
-    // tasklist counts every Electron helper (`--type=gpu-process`, crashpad, renderer, etc.),
-    // which inflates the badge and incorrectly blocks switching. Use PowerShell so we can inspect
-    // the command line and only count live top-level app instances.
+    // Avoid Win32_Process/CIM here. The WMI provider can stall indefinitely on some Windows
+    // installations; repeated polling would then accumulate hidden PowerShell processes.
+    // Get-Process reads executable paths and main-window titles without going through WMI.
     const POWERSHELL_SCRIPT: &str = r#"
-$windowTitles = @{}
 Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | ForEach-Object {
-  $windowTitles[[uint32]$_.Id] = $_.MainWindowTitle
-}
-
-Get-CimInstance Win32_Process |
-  Where-Object { $_.Name -ieq 'Codex.exe' -or $_.Name -ieq 'ChatGPT.exe' } |
-  ForEach-Object {
-    [PSCustomObject]@{
-      Name = $_.Name
-      ProcessId = [uint32]$_.ProcessId
-      ParentProcessId = [uint32]$_.ParentProcessId
-      CommandLine = if ($_.CommandLine) { $_.CommandLine } else { '' }
-      ExecutablePath = if ($_.ExecutablePath) { $_.ExecutablePath } else { '' }
-      MainWindowTitle = if ($windowTitles.ContainsKey([uint32]$_.ProcessId)) {
-        [string]$windowTitles[[uint32]$_.ProcessId]
-      } else {
-        ''
-      }
-    }
-  } |
-  ConvertTo-Json -Compress
+  $executablePath = try { [string]$_.Path } catch { '' }
+  [PSCustomObject]@{
+    Name = "$($_.ProcessName).exe"
+    ProcessId = [uint32]$_.Id
+    ParentProcessId = [uint32]0
+    CommandLine = ''
+    ExecutablePath = $executablePath
+    MainWindowTitle = [string]$_.MainWindowTitle
+  }
+} | ConvertTo-Json -Compress
 "#;
 
-    let output = Command::new("powershell.exe")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            POWERSHELL_SCRIPT,
-        ])
-        .output()
-        .context("failed to query Windows process list")?;
+    let output = run_windows_process_query(POWERSHELL_SCRIPT)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -590,6 +573,55 @@ Get-CimInstance Win32_Process |
     let processes = parse_windows_codex_processes(&stdout)?;
 
     Ok(classify_windows_codex_processes(&processes))
+}
+
+#[cfg(windows)]
+fn run_windows_process_query(script: &str) -> anyhow::Result<Output> {
+    const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
+    const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+    let mut child = Command::new("powershell.exe")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to query Windows process list")?;
+    let started_at = Instant::now();
+
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to wait for Windows process query")?
+        {
+            break status;
+        }
+
+        if started_at.elapsed() >= QUERY_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("Windows process query timed out after 3 seconds");
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)
+            .context("failed to read Windows process query output")?;
+    }
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)
+            .context("failed to read Windows process query error output")?;
+    }
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 #[cfg(any(windows, test))]

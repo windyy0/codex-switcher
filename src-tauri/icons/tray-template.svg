@@ -1,0 +1,7 @@
+<svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- macOS template variant: alpha-only geometry follows the system menu-bar color. -->
+  <circle cx="10" cy="11" r="3" fill="black"/>
+  <circle cx="34" cy="33" r="3" fill="black"/>
+  <path d="M8.5 17.5H31M27.5 14L31 17.5L27.5 21" stroke="black" stroke-width="3.75" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M35.5 26.5H13M16.5 23L13 26.5L16.5 30" stroke="black" stroke-width="3.75" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

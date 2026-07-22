@@ -1,32 +1,9 @@
-<svg width="440" height="440" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!--
-    Monochrome tray companion to logo.svg.
-    Transparent cutouts and generous spacing keep it legible at 22 px.
-  -->
-  <defs>
-    <mask id="arrow-clearance" maskUnits="userSpaceOnUse" x="0" y="0" width="44" height="44">
-      <rect width="44" height="44" fill="white"/>
-      <path d="M19 27V18M19 18L16 21M19 18L22 21"
-            stroke="black" stroke-width="4.25" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M25 17V26M25 26L22 23M25 26L28 23"
-            stroke="black" stroke-width="4.25" stroke-linecap="round" stroke-linejoin="round"/>
-    </mask>
-  </defs>
-
-  <!-- Offset account cards from the main app mark, drawn as outlines for menu-bar clarity. -->
-  <g mask="url(#arrow-clearance)" stroke="black" stroke-linecap="round">
-    <rect x="2.5" y="4.5" width="26" height="16" rx="3.5" stroke-width="2.5"/>
-    <circle cx="9.5" cy="12.5" r="2.5" fill="black" stroke="none"/>
-    <path d="M15 10.5H23M15 14H20.5" stroke-width="2"/>
-
-    <rect x="15.5" y="23.5" width="26" height="16" rx="3.5" stroke-width="2.5"/>
-    <circle cx="34.5" cy="31.5" r="2.5" fill="black" stroke="none"/>
-    <path d="M21 29.5H29M23.5 33H29" stroke-width="2"/>
-  </g>
-
-  <!-- Account switch symbol. -->
-  <g stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M19 27V18M19 18L16 21M19 18L22 21"/>
-    <path d="M25 17V26M25 26L22 23M25 26L28 23"/>
-  </g>
+<svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Windows tray mark: a high-contrast switch symbol with two account accents. -->
+  <rect x="3" y="3" width="38" height="38" rx="11" fill="#111827"/>
+  <rect x="3.5" y="3.5" width="37" height="37" rx="10.5" stroke="#475569"/>
+  <circle cx="11" cy="11" r="3" fill="#3B82F6"/>
+  <circle cx="33" cy="33" r="3" fill="#10B981"/>
+  <path d="M12.5 17.5H29.5M26 14L29.5 17.5L26 21" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M31.5 26.5H14.5M18 23L14.5 26.5L18 30" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
