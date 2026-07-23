@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.106.0] - 2026-07-23
+
 ### Added
 
 - Update prompts now show the highlights for the new version and link to the complete release history.
