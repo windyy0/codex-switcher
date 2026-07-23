@@ -82,12 +82,6 @@ pub fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Quit the whole application from the tray.
-#[tauri::command]
-pub fn quit_app(app: AppHandle) {
-    app.exit(0);
-}
-
 #[tauri::command]
 pub fn get_dock_display_mode() -> Option<DockDisplayMode> {
     #[cfg(target_os = "macos")]

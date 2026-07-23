@@ -73,10 +73,12 @@ const WARMUP_NOTIFICATION_BATCH_DELAY_MS = 750;
 const LIMIT_FULL_THRESHOLD = 99.5;
 const ACCOUNT_LAYOUT_STORAGE_KEY = "codex-switcher-account-layout";
 const SWITCH_ACCOUNT_REQUESTED_EVENT = "tray-switch-account-requested";
-const CODEX_RUNNING_SWITCH_BLOCKED_PREFIX = "Cannot switch accounts while ";
 const CLOSE_BEHAVIOR_REQUESTED_EVENT = "close-behavior-requested";
 interface SwitchAccountRequestedPayload {
   accountId?: string;
+}
+interface TrayAccountSwitchOutcome {
+  status: "switched" | "blocked";
 }
 interface CloseBehaviorRequestedPayload {
   requestId?: number;
@@ -255,6 +257,10 @@ function App() {
   const processInfoRef = useRef<CodexProcessInfo | null>(null);
   const processCheckPromiseRef = useRef<Promise<CodexProcessInfo | null> | null>(null);
   const [pendingTraySwitchAccountId, setPendingTraySwitchAccountId] = useState<string | null>(null);
+  const pendingTraySwitchAccountIdRef = useRef<string | null>(null);
+  const forceCloseSwitchInProgressRef = useRef(false);
+  const traySwitchWorkRef = useRef<Promise<void>>(Promise.resolve());
+  const traySwitchClaimedRequestRef = useRef<SwitchAccountRequestedPayload | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isOpeningCodex, setIsOpeningCodex] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
@@ -321,6 +327,11 @@ function App() {
   // Tracks the last calendar date (YYYY-MM-DD) each scheduled time fired on,
   // so each time triggers at most once per day.
   const timedWarmupLastFireRef = useRef<Record<string, string>>(readStoredTimedWarmupLedger());
+
+  const updatePendingTraySwitch = useCallback((accountId: string | null) => {
+    pendingTraySwitchAccountIdRef.current = accountId;
+    setPendingTraySwitchAccountId(accountId);
+  }, []);
 
   const changeAccountLayout = (layout: AccountLayoutMode) => {
     setAccountLayout(layout);
@@ -528,6 +539,8 @@ function App() {
       })
       .catch((err) => {
         console.error("Failed to check processes:", err);
+        processInfoRef.current = null;
+        setProcessInfo(null);
         return null;
       })
       .finally(() => {
@@ -639,6 +652,10 @@ function App() {
       await switchAccount(accountId);
     } catch (err) {
       console.error("Failed to switch account:", err);
+      showWarmupToast(
+        t("warmup.switchFailed", { error: formatWarmupError(err) }),
+        true
+      );
     } finally {
       setSwitchingId(null);
     }
@@ -721,6 +738,12 @@ function App() {
       await refreshUsage(undefined, { refreshMetadata: true });
       setRefreshSuccess(true);
       setTimeout(() => setRefreshSuccess(false), 2000);
+    } catch (err) {
+      console.error("Failed to refresh usage:", err);
+      showWarmupToast(
+        t("warmup.refreshFailed", { error: formatWarmupError(err) }),
+        true
+      );
     } finally {
       setIsRefreshing(false);
     }
@@ -903,63 +926,233 @@ function App() {
     isForceClosingCodex,
     forceCloseCodexProcesses,
   } = useForceCloseCodexProcesses({
-    processCount: processInfo?.count ?? 0,
     checkProcesses,
     showToast: showWarmupToast,
     formatError: formatWarmupError,
   });
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let unlistenAutoWarmup: (() => void) | undefined;
-    let unlistenCloseBehavior: (() => void) | undefined;
-    let unlistenTrayPage: (() => void) | undefined;
+  const openBlockedTraySwitch = useCallback(
+    (accountId: string) => {
+      updatePendingTraySwitch(accountId);
+      setForceCloseConfirmOpen(true);
+      void invokeBackend("open_main_window");
+    },
+    [setForceCloseConfirmOpen, updatePendingTraySwitch]
+  );
 
-    void (async () => {
-      if (!isTauriRuntime()) return;
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<SwitchAccountRequestedPayload>(
-        SWITCH_ACCOUNT_REQUESTED_EVENT,
-        async (event) => {
-          const accountId = event.payload?.accountId;
+  const executeTraySwitch = useCallback(
+    async (accountId: string) => {
+      if (forceCloseSwitchInProgressRef.current) {
+        if (!pendingTraySwitchAccountIdRef.current) {
+          updatePendingTraySwitch(accountId);
+        }
+        return;
+      }
 
-          if (!accountId) {
+      try {
+        setSwitchingId(accountId);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const outcome = await invokeBackend<TrayAccountSwitchOutcome>(
+            "switch_account_from_tray",
+            { accountId }
+          );
+          if (forceCloseSwitchInProgressRef.current) {
+            if (!pendingTraySwitchAccountIdRef.current) {
+              updatePendingTraySwitch(accountId);
+            }
+            return;
+          }
+          if (outcome.status === "switched") break;
+
+          const latestProcessInfo = await checkProcesses();
+          if (forceCloseSwitchInProgressRef.current) {
+            if (!pendingTraySwitchAccountIdRef.current) {
+              updatePendingTraySwitch(accountId);
+            }
+            return;
+          }
+          if (!latestProcessInfo) {
+            showWarmupToast(t("warmup.processCheckFailed"), true);
+            return;
+          }
+          if (latestProcessInfo?.can_switch) {
+            if (attempt === 0) continue;
             showWarmupToast(t("warmup.switchBlocked"), true);
             return;
           }
 
-          const openBlockedSwitchConfirmation = () => {
-            setPendingTraySwitchAccountId(accountId);
-            setForceCloseConfirmOpen(true);
-            void invokeBackend("open_main_window");
-          };
+          openBlockedTraySwitch(accountId);
+          return;
+        }
 
-          if (processInfoRef.current && !processInfoRef.current.can_switch) {
-            openBlockedSwitchConfirmation();
-            void checkProcesses();
+        if (forceCloseSwitchInProgressRef.current) {
+          if (!pendingTraySwitchAccountIdRef.current) {
+            updatePendingTraySwitch(accountId);
+          }
+          return;
+        }
+
+        updatePendingTraySwitch(null);
+        setForceCloseConfirmOpen(false);
+        void loadAccounts(true).catch((err) => {
+          console.error("Tray account switched but the list could not be reloaded:", err);
+        });
+        showWarmupToast(t("warmup.switchedFromTray"));
+      } catch (err) {
+        if (forceCloseSwitchInProgressRef.current) {
+          if (!pendingTraySwitchAccountIdRef.current) {
+            updatePendingTraySwitch(accountId);
+          }
+          return;
+        }
+        console.error("Failed to switch account from tray:", err);
+        showWarmupToast(
+          t("warmup.switchFailed", { error: formatWarmupError(err) }),
+          true
+        );
+      } finally {
+        setSwitchingId((currentId) =>
+          currentId === accountId && !forceCloseSwitchInProgressRef.current
+            ? null
+            : currentId
+        );
+      }
+    },
+    [
+      checkProcesses,
+      formatWarmupError,
+      loadAccounts,
+      openBlockedTraySwitch,
+      setForceCloseConfirmOpen,
+      showWarmupToast,
+      t,
+      updatePendingTraySwitch,
+    ]
+  );
+
+  const handleTraySwitchRequest = useCallback(
+    async (request: SwitchAccountRequestedPayload) => {
+      const accountId = request.accountId;
+      if (!accountId) return;
+      if (forceCloseSwitchInProgressRef.current) {
+        updatePendingTraySwitch(accountId);
+        return;
+      }
+
+      if (processInfoRef.current && !processInfoRef.current.can_switch) {
+        const latestProcessInfo = await checkProcesses();
+        if (forceCloseSwitchInProgressRef.current) {
+          if (!pendingTraySwitchAccountIdRef.current) {
+            updatePendingTraySwitch(accountId);
+          }
+          return;
+        }
+        if (!latestProcessInfo) {
+          showWarmupToast(t("warmup.processCheckFailed"), true);
+          return;
+        }
+        if (!latestProcessInfo.can_switch) {
+          openBlockedTraySwitch(accountId);
+          return;
+        }
+      }
+
+      await executeTraySwitch(accountId);
+    },
+    [
+      checkProcesses,
+      executeTraySwitch,
+      openBlockedTraySwitch,
+      showWarmupToast,
+      t,
+      updatePendingTraySwitch,
+    ]
+  );
+
+  // Keep the native event subscription mounted across language/render changes.
+  // The shared work chain also makes StrictMode effect replays wait for any
+  // switch already claimed by the previous listener instance.
+  const traySwitchHandlerRef = useRef(handleTraySwitchRequest);
+  const traySwitchToastRef = useRef(showWarmupToast);
+  const traySwitchErrorFormatterRef = useRef(formatWarmupError);
+  const traySwitchTranslatorRef = useRef(t);
+  traySwitchHandlerRef.current = handleTraySwitchRequest;
+  traySwitchToastRef.current = showWarmupToast;
+  traySwitchErrorFormatterRef.current = formatWarmupError;
+  traySwitchTranslatorRef.current = t;
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let unlistenAutoWarmup: (() => void) | undefined;
+    let unlistenCloseBehavior: (() => void) | undefined;
+    let unlistenTrayPage: (() => void) | undefined;
+    let switchDrainRetryTimer: number | undefined;
+
+    void (async () => {
+      if (!isTauriRuntime()) return;
+      const { listen } = await import("@tauri-apps/api/event");
+      let switchDrainRetryCount = 0;
+      const drainPendingSwitchRequests = async () => {
+        try {
+          while (!disposed) {
+            const request =
+              traySwitchClaimedRequestRef.current ??
+              (await invokeBackend<SwitchAccountRequestedPayload | null>(
+                "take_pending_tray_switch_request"
+              ));
+            if (disposed || !request) {
+              switchDrainRetryCount = 0;
+              return;
+            }
+            traySwitchClaimedRequestRef.current = request;
+            await traySwitchHandlerRef.current(request);
+            traySwitchClaimedRequestRef.current = null;
+          }
+        } catch (err) {
+          console.error("Failed to claim a pending tray account switch:", err);
+          if (disposed) return;
+          if (switchDrainRetryCount < 3) {
+            switchDrainRetryCount += 1;
+            switchDrainRetryTimer = window.setTimeout(
+              scheduleSwitchDrain,
+              250 * switchDrainRetryCount
+            );
             return;
           }
-
-          try {
-            setSwitchingId(accountId);
-            await switchAccount(accountId);
-            setPendingTraySwitchAccountId(null);
-            showWarmupToast(t("warmup.switchedFromTray"));
-          } catch (err) {
-            console.error("Failed to switch account from tray:", err);
-            const error = formatWarmupError(err);
-            if (error.startsWith(CODEX_RUNNING_SWITCH_BLOCKED_PREFIX)) {
-              openBlockedSwitchConfirmation();
-              void checkProcesses();
-            } else {
-              showWarmupToast(t("warmup.switchFailed", { error }), true);
-            }
-          } finally {
-            setSwitchingId(null);
-          }
+          switchDrainRetryCount = 0;
+          traySwitchToastRef.current(
+            traySwitchTranslatorRef.current("warmup.switchFailed", {
+              error: traySwitchErrorFormatterRef.current(err),
+            }),
+            true
+          );
         }
+      };
+      function scheduleSwitchDrain() {
+        if (disposed) return;
+        if (switchDrainRetryTimer !== undefined) {
+          window.clearTimeout(switchDrainRetryTimer);
+          switchDrainRetryTimer = undefined;
+        }
+        traySwitchWorkRef.current = traySwitchWorkRef.current.then(
+          drainPendingSwitchRequests,
+          drainPendingSwitchRequests
+        );
+      }
+
+      const unlistenSwitch = await listen(
+        SWITCH_ACCOUNT_REQUESTED_EVENT,
+        scheduleSwitchDrain
       );
-      unlistenAutoWarmup = await listen<boolean>(
+      if (disposed) {
+        unlistenSwitch();
+        return;
+      }
+      unlisten = unlistenSwitch;
+      // Claim anything queued before the React listener became ready.
+      scheduleSwitchDrain();
+      const unlistenAutoWarmupEvent = await listen<boolean>(
         AUTO_WARMUP_ALL_CHANGED_EVENT,
         ({ payload }) => {
           if (typeof payload === "boolean") {
@@ -967,7 +1160,12 @@ function App() {
           }
         }
       );
-      unlistenCloseBehavior = await listen<CloseBehaviorRequestedPayload>(
+      if (disposed) {
+        unlistenAutoWarmupEvent();
+        return;
+      }
+      unlistenAutoWarmup = unlistenAutoWarmupEvent;
+      const unlistenCloseBehaviorEvent = await listen<CloseBehaviorRequestedPayload>(
         CLOSE_BEHAVIOR_REQUESTED_EVENT,
         ({ payload }) => {
           const requestId = payload?.requestId;
@@ -978,7 +1176,12 @@ function App() {
           setCloseBehaviorPromptOpen(true);
         }
       );
-      unlistenTrayPage = await listen<"accounts" | "settings">(
+      if (disposed) {
+        unlistenCloseBehaviorEvent();
+        return;
+      }
+      unlistenCloseBehavior = unlistenCloseBehaviorEvent;
+      const unlistenTrayPageEvent = await listen<"accounts" | "settings">(
         "tray-open-page",
         ({ payload }) => {
           if (payload !== "accounts" && payload !== "settings") return;
@@ -986,15 +1189,24 @@ function App() {
           setCurrentPage(payload);
         }
       );
+      if (disposed) {
+        unlistenTrayPageEvent();
+        return;
+      }
+      unlistenTrayPage = unlistenTrayPageEvent;
     })();
 
     return () => {
+      disposed = true;
       unlisten?.();
       unlistenAutoWarmup?.();
       unlistenCloseBehavior?.();
       unlistenTrayPage?.();
+      if (switchDrainRetryTimer !== undefined) {
+        window.clearTimeout(switchDrainRetryTimer);
+      }
     };
-  }, [checkProcesses, formatWarmupError, setForceCloseConfirmOpen, showWarmupToast, switchAccount, t]);
+  }, []);
 
   const handleCloseBehaviorChoice = useCallback(
     async (mode: DockDisplayMode) => {
@@ -1016,40 +1228,105 @@ function App() {
   );
 
   const handleForceCloseConfirm = useCallback(async () => {
-    const accountId = pendingTraySwitchAccountId;
-    const latestProcessInfo = await forceCloseCodexProcesses();
-
-    if (!accountId) {
-      return;
-    }
-
-    if (!latestProcessInfo?.can_switch) {
-      setPendingTraySwitchAccountId(null);
-      return;
-    }
+    if (forceCloseSwitchInProgressRef.current) return;
+    forceCloseSwitchInProgressRef.current = true;
+    const initialPendingTraySwitchAccountId =
+      pendingTraySwitchAccountIdRef.current;
+    let inFlightTraySwitchAccountId: string | null = null;
+    const clearPendingUnlessReplaced = (expectedAccountId: string | null) => {
+      const pendingAccountId = pendingTraySwitchAccountIdRef.current;
+      if (pendingAccountId && pendingAccountId !== expectedAccountId) {
+        // A newer tray click arrived while the previous operation was in
+        // flight. Keep it queued and leave the confirmation available.
+        setForceCloseConfirmOpen(true);
+        return;
+      }
+      updatePendingTraySwitch(null);
+      setForceCloseConfirmOpen(false);
+    };
 
     try {
-      setSwitchingId(accountId);
-      await switchAccount(accountId);
-      setPendingTraySwitchAccountId(null);
-      showWarmupToast(t("warmup.switchedAfterClose"));
+      const latestProcessInfo = await forceCloseCodexProcesses();
+      if (!latestProcessInfo) {
+        clearPendingUnlessReplaced(initialPendingTraySwitchAccountId);
+        return;
+      }
+      if (!latestProcessInfo.can_switch) {
+        // The force-close hook closes the confirmation while it reports its
+        // result. Keep a tray-triggered confirmation available when some
+        // Codex processes survived, so the user can retry or cancel.
+        if (pendingTraySwitchAccountIdRef.current) {
+          setForceCloseConfirmOpen(true);
+        }
+        return;
+      }
+
+      while (true) {
+        const accountId = pendingTraySwitchAccountIdRef.current;
+        if (!accountId) return;
+
+        inFlightTraySwitchAccountId = accountId;
+        setSwitchingId(accountId);
+        let switched = false;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const outcome = await invokeBackend<TrayAccountSwitchOutcome>(
+            "switch_account_from_tray",
+            { accountId }
+          );
+          if (outcome.status === "switched") {
+            switched = true;
+            break;
+          }
+
+          const blockedProcessInfo = await checkProcesses();
+          if (!blockedProcessInfo) {
+            clearPendingUnlessReplaced(accountId);
+            showWarmupToast(t("warmup.processCheckFailed"), true);
+            return;
+          }
+          if (blockedProcessInfo.can_switch && attempt === 0) continue;
+          if (!blockedProcessInfo.can_switch) {
+            setForceCloseConfirmOpen(true);
+            return;
+          }
+
+          if (pendingTraySwitchAccountIdRef.current !== accountId) break;
+          clearPendingUnlessReplaced(accountId);
+          showWarmupToast(t("warmup.switchBlocked"), true);
+          return;
+        }
+        if (!switched) continue;
+
+        // A newer tray choice made while the close/switch transaction was in
+        // flight wins. Apply it before reporting the operation as complete.
+        if (pendingTraySwitchAccountIdRef.current !== accountId) continue;
+        updatePendingTraySwitch(null);
+        void loadAccounts(true).catch((err) => {
+          console.error("Account switched after force close but the list could not be reloaded:", err);
+        });
+        showWarmupToast(t("warmup.switchedAfterClose"));
+        return;
+      }
     } catch (err) {
       console.error("Failed to switch account after force close:", err);
-      setPendingTraySwitchAccountId(null);
+      clearPendingUnlessReplaced(inFlightTraySwitchAccountId);
       showWarmupToast(
         t("warmup.switchAfterCloseFailed", { error: formatWarmupError(err) }),
         true
       );
     } finally {
+      forceCloseSwitchInProgressRef.current = false;
       setSwitchingId(null);
     }
   }, [
+    checkProcesses,
     forceCloseCodexProcesses,
     formatWarmupError,
-    pendingTraySwitchAccountId,
+    loadAccounts,
+    setForceCloseConfirmOpen,
     showWarmupToast,
-    switchAccount,
     t,
+    updatePendingTraySwitch,
   ]);
 
   const handleWarmupAccount = async (accountId: string, accountName: string) => {
@@ -1981,7 +2258,7 @@ function App() {
                       {hasRunningProcesses && (
                         <button
                           onClick={() => {
-                            setPendingTraySwitchAccountId(null);
+                            updatePendingTraySwitch(null);
                             setForceCloseConfirmOpen(true);
                           }}
                           disabled={isForceClosingCodex}
@@ -2610,10 +2887,10 @@ function App() {
             <div className="flex justify-end gap-3 p-5 border-t border-gray-100 dark:border-gray-800">
               <button
                 onClick={() => {
-                  setPendingTraySwitchAccountId(null);
+                  updatePendingTraySwitch(null);
                   setForceCloseConfirmOpen(false);
                 }}
-                disabled={isForceClosingCodex}
+                disabled={isForceClosingCodex || switchingId !== null}
                 className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-colors disabled:opacity-50"
               >
                 {t("common.cancel")}
@@ -2622,7 +2899,7 @@ function App() {
                 onClick={() => {
                   void handleForceCloseConfirm();
                 }}
-                disabled={isForceClosingCodex}
+                disabled={isForceClosingCodex || switchingId !== null}
                 className="px-4 py-2.5 text-sm font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50"
               >
                 {isForceClosingCodex

@@ -283,7 +283,9 @@ pub async fn add_api_account(
 /// Switch to a different account
 #[tauri::command]
 pub async fn switch_account(account_id: String) -> Result<(), String> {
-    switch_account_by_id(&account_id)
+    tokio::task::spawn_blocking(move || switch_account_by_id(&account_id))
+        .await
+        .map_err(|error| format!("Account switch task failed: {error}"))?
 }
 
 pub fn switch_account_by_id(account_id: &str) -> Result<(), String> {

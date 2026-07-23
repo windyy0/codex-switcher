@@ -2,13 +2,6 @@
 
 use std::process::Command;
 
-#[cfg(windows)]
-use std::{
-    io::Read,
-    process::{Output, Stdio},
-    time::{Duration, Instant},
-};
-
 #[cfg(any(windows, test))]
 use anyhow::Context;
 
@@ -22,21 +15,63 @@ use std::collections::HashSet;
 use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(windows)]
+use windows::{
+    core::PWSTR,
+    Win32::{
+        Foundation::{CloseHandle, BOOL, ERROR_NO_MORE_FILES, FILETIME, HANDLE, HWND, LPARAM},
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+                PROCESS_QUERY_LIMITED_INFORMATION,
+            },
+        },
+        UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible},
+    },
+};
+
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(any(windows, test))]
+const WINDOWS_FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
+#[cfg(any(windows, test))]
+const WINDOWS_PROCESS_STARTUP_GRACE_SECONDS: u64 = 30;
 
 #[cfg(any(windows, test))]
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct WindowsCodexProcess {
+#[derive(Debug, Clone)]
+struct WindowsProcessEntry {
     name: String,
     process_id: u32,
     parent_process_id: u32,
-    #[serde(default)]
-    command_line: String,
-    #[serde(default)]
     executable_path: String,
-    #[serde(default)]
-    main_window_title: String,
+    trusted_desktop_executable: bool,
+    has_visible_window: bool,
+    started_recently: bool,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+struct WindowsProcessDetails {
+    executable_path: String,
+    started_recently: bool,
+}
+
+#[cfg(windows)]
+struct OwnedWindowsHandle(HANDLE);
+
+#[cfg(windows)]
+impl Drop for OwnedWindowsHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
 }
 
 /// Information about running Codex processes
@@ -74,7 +109,10 @@ const CODEX_RUNNING_SWITCH_BLOCKED_PREFIX: &str = "Cannot switch accounts while 
 /// Check for running Codex processes
 #[tauri::command]
 pub async fn check_codex_processes() -> Result<CodexProcessInfo, String> {
-    let (pids, bg_count) = find_codex_processes().map_err(|e| e.to_string())?;
+    let (pids, bg_count) = tokio::task::spawn_blocking(find_codex_processes)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     let count = pids.len();
 
     Ok(CodexProcessInfo {
@@ -97,6 +135,10 @@ pub(crate) fn ensure_codex_not_running() -> Result<(), String> {
         pids.len(),
         if pids.len() == 1 { " is" } else { "es are" }
     ))
+}
+
+pub(crate) fn is_codex_running_switch_block(error: &str) -> bool {
+    error.starts_with(CODEX_RUNNING_SWITCH_BLOCKED_PREFIX)
 }
 
 /// Force-close active Codex processes that currently block account switching.
@@ -545,118 +587,192 @@ fn read_macos_app_bundle_identifier(command: &str, process_name: Option<&str>) -
 
 #[cfg(windows)]
 fn find_windows_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
-    // Avoid Win32_Process/CIM here. The WMI provider can stall indefinitely on some Windows
-    // installations; repeated polling would then accumulate hidden PowerShell processes.
-    // Get-Process reads executable paths and main-window titles without going through WMI.
-    const POWERSHELL_SCRIPT: &str = r#"
-Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | ForEach-Object {
-  $executablePath = try { [string]$_.Path } catch { '' }
-  [PSCustomObject]@{
-    Name = "$($_.ProcessName).exe"
-    ProcessId = [uint32]$_.Id
-    ParentProcessId = [uint32]0
-    CommandLine = ''
-    ExecutablePath = $executablePath
-    MainWindowTitle = [string]$_.MainWindowTitle
-  }
-} | ConvertTo-Json -Compress
-"#;
-
-    let output = run_windows_process_query(POWERSHELL_SCRIPT)?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("PowerShell process query failed: {}", stderr.trim());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let processes = parse_windows_codex_processes(&stdout)?;
-
+    // Toolhelp and User32 are local, bounded Win32 calls. Keeping the process snapshot native
+    // avoids both the WMI/CIM stalls seen on some machines and stdout-pipe backpressure from a
+    // helper PowerShell process. Parent PIDs are preserved so startup-time renderer/app-server
+    // trees still block account switching before the main window has a title.
+    let processes = read_windows_process_snapshot()?;
     Ok(classify_windows_codex_processes(&processes))
 }
 
 #[cfg(windows)]
-fn run_windows_process_query(script: &str) -> anyhow::Result<Output> {
-    const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
-    const POLL_INTERVAL: Duration = Duration::from_millis(20);
-
-    let mut child = Command::new("powershell.exe")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to query Windows process list")?;
-    let started_at = Instant::now();
-
-    let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .context("failed to wait for Windows process query")?
-        {
-            break status;
-        }
-
-        if started_at.elapsed() >= QUERY_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!("Windows process query timed out after 3 seconds");
-        }
-
-        std::thread::sleep(POLL_INTERVAL);
+fn read_windows_process_snapshot() -> anyhow::Result<Vec<WindowsProcessEntry>> {
+    let window_processes = read_windows_window_processes()?;
+    let snapshot = OwnedWindowsHandle(
+        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+            .context("failed to snapshot Windows processes")?,
+    );
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
     };
+    unsafe { Process32FirstW(snapshot.0, &mut entry) }
+        .context("failed to read the first Windows process")?;
 
-    let mut stdout = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_end(&mut stdout)
-            .context("failed to read Windows process query output")?;
-    }
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_end(&mut stderr)
-            .context("failed to read Windows process query error output")?;
+    let mut processes = Vec::new();
+    loop {
+        let name = utf16_c_string(&entry.szExeFile);
+        let process_id = entry.th32ProcessID;
+        let needs_path =
+            name.eq_ignore_ascii_case("Codex.exe") || name.eq_ignore_ascii_case("ChatGPT.exe");
+        let details = if needs_path {
+            read_windows_process_details(process_id)
+                .with_context(|| format!("failed to inspect {name} process (PID {process_id})"))?
+        } else {
+            WindowsProcessDetails::default()
+        };
+        let trusted_desktop_executable = if name.eq_ignore_ascii_case("Codex.exe") {
+            is_windows_legacy_codex_desktop_path(&details.executable_path)
+                || is_windows_codex_package_root_path(&details.executable_path)
+        } else if name.eq_ignore_ascii_case("ChatGPT.exe") {
+            is_windows_codex_package_root_path(&details.executable_path)
+        } else {
+            false
+        };
+        processes.push(WindowsProcessEntry {
+            name,
+            process_id,
+            parent_process_id: entry.th32ParentProcessID,
+            executable_path: details.executable_path,
+            trusted_desktop_executable,
+            has_visible_window: window_processes.contains(&process_id),
+            started_recently: details.started_recently,
+        });
+
+        match unsafe { Process32NextW(snapshot.0, &mut entry) } {
+            Ok(()) => {}
+            Err(error) if error.code() == ERROR_NO_MORE_FILES.to_hresult() => break,
+            Err(error) => return Err(error).context("failed to read the next Windows process"),
+        }
     }
 
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
+    Ok(processes)
+}
+
+#[cfg(windows)]
+fn read_windows_process_details(process_id: u32) -> anyhow::Result<WindowsProcessDetails> {
+    let process = OwnedWindowsHandle(
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }
+            .context("failed to open Windows process")?,
+    );
+
+    Ok(WindowsProcessDetails {
+        executable_path: read_windows_process_path(process.0)?,
+        started_recently: windows_process_started_recently(process.0)?,
     })
 }
 
+#[cfg(windows)]
+fn read_windows_process_path(process: HANDLE) -> anyhow::Result<String> {
+    let mut path = vec![0u16; 32_768];
+    let mut path_len = path.len() as u32;
+    unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(path.as_mut_ptr()),
+            &mut path_len,
+        )
+    }
+    .context("failed to read Windows process path")?;
+    path.truncate(path_len as usize);
+    Ok(String::from_utf16_lossy(&path))
+}
+
+#[cfg(windows)]
+fn windows_process_started_recently(process: HANDLE) -> anyhow::Result<bool> {
+    const FILETIME_UNIX_EPOCH_OFFSET_SECONDS: u64 = 11_644_473_600;
+
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) }
+        .context("failed to read Windows process times")?;
+
+    let created_ticks =
+        (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    let since_unix_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?;
+    let now_ticks = since_unix_epoch
+        .as_secs()
+        .saturating_add(FILETIME_UNIX_EPOCH_OFFSET_SECONDS)
+        .saturating_mul(WINDOWS_FILETIME_TICKS_PER_SECOND)
+        .saturating_add(u64::from(since_unix_epoch.subsec_nanos()) / 100);
+
+    Ok(is_recent_windows_process_start(created_ticks, now_ticks))
+}
+
 #[cfg(any(windows, test))]
-fn classify_windows_codex_processes(processes: &[WindowsCodexProcess]) -> (Vec<u32>, usize) {
+fn is_recent_windows_process_start(created_ticks: u64, now_ticks: u64) -> bool {
+    created_ticks != 0
+        && created_ticks <= now_ticks
+        && now_ticks - created_ticks
+            <= WINDOWS_PROCESS_STARTUP_GRACE_SECONDS
+                .saturating_mul(WINDOWS_FILETIME_TICKS_PER_SECOND)
+}
+
+#[cfg(windows)]
+fn read_windows_window_processes() -> anyhow::Result<HashSet<u32>> {
+    let mut process_ids = HashSet::new();
+    unsafe {
+        EnumWindows(
+            Some(collect_windows_window_process),
+            LPARAM((&mut process_ids as *mut HashSet<u32>) as isize),
+        )
+    }
+    .context("failed to enumerate Windows top-level windows")?;
+    Ok(process_ids)
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn collect_windows_window_process(hwnd: HWND, state: LPARAM) -> BOOL {
+    if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        return true.into();
+    }
+
+    let mut process_id = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+    if process_id != 0 {
+        let process_ids = unsafe { &mut *(state.0 as *mut HashSet<u32>) };
+        process_ids.insert(process_id);
+    }
+    true.into()
+}
+
+#[cfg(any(windows, test))]
+fn utf16_c_string(value: &[u16]) -> String {
+    let end = value
+        .iter()
+        .position(|character| *character == 0)
+        .unwrap_or(value.len());
+    String::from_utf16_lossy(&value[..end])
+}
+
+#[cfg(any(windows, test))]
+fn classify_windows_codex_processes(processes: &[WindowsProcessEntry]) -> (Vec<u32>, usize) {
     let mut active_pids = Vec::new();
     let mut ignored_count = 0;
 
     for process in processes
         .iter()
-        .filter(|process| is_windows_codex_root_process(process))
+        .filter(|process| is_windows_codex_root_process(process, processes))
     {
-        let command = process.command_line.to_ascii_lowercase();
-        if is_ide_plugin_process(&command) {
-            ignored_count += 1;
-            continue;
-        }
-
-        let has_window = !process.main_window_title.trim().is_empty();
-        let has_renderer =
-            windows_has_descendant_matching(process.process_id, processes, |child| {
-                child
-                    .command_line
-                    .to_ascii_lowercase()
-                    .contains("--type=renderer")
+        let has_window = process.has_visible_window
+            || windows_has_descendant_matching(process.process_id, processes, |child| {
+                child.has_visible_window
             });
         let has_app_server =
             windows_has_descendant_matching(process.process_id, processes, |child| {
-                let command = normalize_windows_path(&child.command_line);
-                command.contains("resources\\codex.exe") && command.contains("app-server")
+                normalize_windows_path(&child.executable_path).contains("\\resources\\codex.exe")
             });
 
-        if has_window || has_renderer || has_app_server {
+        if has_window || process.started_recently || has_app_server {
             active_pids.push(process.process_id);
         } else {
-            // Ignore stale helper trees left behind after the window has already closed.
+            // Ignore a lone headless root and stale Electron helpers after the desktop window
+            // and app-server have exited.
             ignored_count += 1;
         }
     }
@@ -668,92 +784,166 @@ fn classify_windows_codex_processes(processes: &[WindowsCodexProcess]) -> (Vec<u
 }
 
 #[cfg(any(windows, test))]
-fn parse_windows_codex_processes(stdout: &str) -> anyhow::Result<Vec<WindowsCodexProcess>> {
-    let trimmed = stdout.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
+fn is_windows_codex_root_process(
+    process: &WindowsProcessEntry,
+    processes: &[WindowsProcessEntry],
+) -> bool {
+    if !is_windows_codex_candidate(process) {
+        return false;
     }
 
-    let value: serde_json::Value =
-        serde_json::from_str(trimmed).context("failed to parse Windows process JSON")?;
-
-    match value {
-        serde_json::Value::Array(values) => values
-            .into_iter()
-            .map(|value| {
-                serde_json::from_value(value)
-                    .context("failed to deserialize Windows Codex process entry")
-            })
-            .collect(),
-        value => Ok(vec![serde_json::from_value(value)
-            .context("failed to deserialize Windows Codex process entry")?]),
-    }
+    !windows_has_candidate_ancestor(process.parent_process_id, processes)
 }
 
 #[cfg(any(windows, test))]
-fn is_windows_codex_root_process(process: &WindowsCodexProcess) -> bool {
+fn is_windows_codex_candidate(process: &WindowsProcessEntry) -> bool {
     let name = process.name.to_ascii_lowercase();
-    let command = normalize_windows_path(&process.command_line);
-
-    if command.contains("codex-switcher") || command.contains("--type=") {
+    let executable_path = normalize_windows_path(&process.executable_path);
+    if executable_path.contains("codex-switcher") || is_ide_plugin_process(&executable_path) {
         return false;
     }
 
     if name == "codex.exe" {
-        let executable_path = normalize_windows_path(&process.executable_path);
-        return !command.contains("resources\\codex.exe")
-            && !executable_path.contains("resources\\codex.exe");
+        // These PIDs are also offered to the force-close path, so an arbitrary
+        // same-name executable must never be treated as the desktop app. A
+        // failed path inspection aborts the Windows snapshot before reaching
+        // this classifier.
+        return process.trusted_desktop_executable;
     }
 
-    name == "chatgpt.exe" && is_windows_codex_package_chatgpt_process(process)
+    name == "chatgpt.exe" && process.trusted_desktop_executable
+}
+
+#[cfg(windows)]
+fn is_windows_legacy_codex_desktop_path(path: &str) -> bool {
+    let local_match = std::env::var("LOCALAPPDATA").ok().is_some_and(|root| {
+        windows_path_relative_to_root(path, &root)
+            .is_some_and(|relative| is_supported_local_app_data_codex_path(&relative))
+    });
+    local_match
+        || ["ProgramFiles", "ProgramFiles(x86)"]
+            .iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .any(|root| {
+                windows_path_relative_to_root(path, &root)
+                    .is_some_and(|relative| is_supported_program_files_codex_path(&relative))
+            })
 }
 
 #[cfg(any(windows, test))]
-fn is_windows_codex_package_chatgpt_process(process: &WindowsCodexProcess) -> bool {
-    let executable_path = process.executable_path.trim();
-    if !executable_path.is_empty() {
-        return is_windows_codex_package_chatgpt_path(executable_path);
-    }
-
-    windows_command_executable_path(&process.command_line)
-        .is_some_and(is_windows_codex_package_chatgpt_path)
+fn windows_path_relative_to_root(path: &str, root: &str) -> Option<String> {
+    let path = normalize_windows_absolute_path(path.trim().trim_matches('"'));
+    let root = normalize_windows_absolute_path(root.trim().trim_matches('"'))
+        .trim_end_matches('\\')
+        .to_string();
+    path.strip_prefix(&format!("{root}\\")).map(str::to_owned)
 }
 
 #[cfg(any(windows, test))]
-fn is_windows_codex_package_chatgpt_path(path: &str) -> bool {
-    let normalized = normalize_windows_path(path.trim().trim_matches('"'));
-    let Some(package_path) = normalized.strip_suffix("\\app\\chatgpt.exe") else {
+fn is_supported_local_app_data_codex_path(relative_path: &str) -> bool {
+    let relative = normalize_windows_path(relative_path)
+        .trim_matches('\\')
+        .to_string();
+    if [
+        "codex\\codex.exe",
+        "openai\\codex\\codex.exe",
+        "openai codex\\codex.exe",
+        "codex desktop\\codex.exe",
+    ]
+    .contains(&relative.as_str())
+    {
+        return true;
+    }
+
+    let programs_layout = [
+        "programs\\codex\\codex.exe",
+        "programs\\openai\\codex\\codex.exe",
+        "programs\\openai codex\\codex.exe",
+        "programs\\codex desktop\\codex.exe",
+    ]
+    .contains(&relative.as_str());
+    programs_layout
+}
+
+#[cfg(any(windows, test))]
+fn is_supported_program_files_codex_path(relative_path: &str) -> bool {
+    let relative = normalize_windows_path(relative_path)
+        .trim_matches('\\')
+        .to_string();
+    [
+        "programs\\codex\\codex.exe",
+        "programs\\openai\\codex\\codex.exe",
+        "programs\\openai codex\\codex.exe",
+        "programs\\codex desktop\\codex.exe",
+        "codex\\codex.exe",
+        "openai\\codex\\codex.exe",
+        "openai codex\\codex.exe",
+        "codex desktop\\codex.exe",
+    ]
+    .contains(&relative.as_str())
+}
+
+#[cfg(any(windows, test))]
+fn windows_has_candidate_ancestor(
+    parent_process_id: u32,
+    processes: &[WindowsProcessEntry],
+) -> bool {
+    let mut current_pid = parent_process_id;
+    let mut visited = HashSet::new();
+    while current_pid != 0 && visited.insert(current_pid) {
+        let Some(parent) = processes
+            .iter()
+            .find(|process| process.process_id == current_pid)
+        else {
+            break;
+        };
+        if is_windows_codex_candidate(parent) {
+            return true;
+        }
+        current_pid = parent.parent_process_id;
+    }
+    false
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_codex_package_root_path(path: &str) -> bool {
+    let normalized = normalize_windows_absolute_path(path.trim().trim_matches('"'));
+    let Some(package_path) = normalized
+        .strip_suffix("\\app\\chatgpt.exe")
+        .or_else(|| normalized.strip_suffix("\\app\\codex.exe"))
+    else {
         return false;
     };
     let mut components = package_path.rsplit('\\');
     let Some(package_name) = components.next() else {
         return false;
     };
-    let Some(package_parent) = components.next() else {
-        return false;
-    };
+    let windows_apps_path = components.collect::<Vec<_>>();
+    let trusted_windows_apps_root = matches!(
+        windows_apps_path.as_slice(),
+        ["windowsapps", drive] if drive.ends_with(':')
+    ) || matches!(
+        windows_apps_path.as_slice(),
+        ["windowsapps", "program files", drive] if drive.ends_with(':')
+    );
 
-    package_parent == "windowsapps"
+    trusted_windows_apps_root
         && package_name.starts_with("openai.codex_")
         && package_name.ends_with("__2p2nqsd0c76g0")
 }
 
 #[cfg(any(windows, test))]
-fn windows_command_executable_path(command: &str) -> Option<&str> {
-    let command = command.trim_start();
-    if let Some(quoted) = command.strip_prefix('"') {
-        return quoted
-            .split_once('"')
-            .map(|(path, _)| path)
-            .filter(|path| !path.is_empty());
-    }
-
-    command.split_whitespace().next()
+fn normalize_windows_path(value: &str) -> String {
+    value.replace('/', "\\").to_ascii_lowercase()
 }
 
 #[cfg(any(windows, test))]
-fn normalize_windows_path(value: &str) -> String {
-    value.replace('/', "\\").to_ascii_lowercase()
+fn normalize_windows_absolute_path(value: &str) -> String {
+    let normalized = normalize_windows_path(value);
+    normalized
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 #[cfg(any(unix, windows, test))]
@@ -768,8 +958,10 @@ mod tests {
     #[cfg(unix)]
     use super::is_macos_codex_desktop_process;
     use super::{
-        classify_windows_codex_processes, is_windows_codex_root_process,
-        parse_windows_codex_processes, WindowsCodexProcess,
+        classify_windows_codex_processes, is_recent_windows_process_start,
+        is_supported_local_app_data_codex_path, is_supported_program_files_codex_path,
+        is_windows_codex_candidate, is_windows_codex_root_process, normalize_windows_path,
+        utf16_c_string, windows_path_relative_to_root, WindowsProcessEntry,
     };
 
     fn windows_process(
@@ -777,16 +969,30 @@ mod tests {
         process_id: u32,
         parent_process_id: u32,
         executable_path: &str,
-        command_line: &str,
-        main_window_title: &str,
-    ) -> WindowsCodexProcess {
-        WindowsCodexProcess {
+        has_visible_window: bool,
+    ) -> WindowsProcessEntry {
+        let normalized_path = normalize_windows_path(executable_path);
+        let trusted_desktop_executable = if name.eq_ignore_ascii_case("Codex.exe") {
+            windows_path_relative_to_root(&normalized_path, r"C:\Users\test\AppData\Local")
+                .is_some_and(|relative| is_supported_local_app_data_codex_path(&relative))
+                || windows_path_relative_to_root(&normalized_path, r"C:\Program Files")
+                    .is_some_and(|relative| is_supported_program_files_codex_path(&relative))
+                || windows_path_relative_to_root(&normalized_path, r"C:\Program Files (x86)")
+                    .is_some_and(|relative| is_supported_program_files_codex_path(&relative))
+                || super::is_windows_codex_package_root_path(&normalized_path)
+        } else if name.eq_ignore_ascii_case("ChatGPT.exe") {
+            super::is_windows_codex_package_root_path(&normalized_path)
+        } else {
+            false
+        };
+        WindowsProcessEntry {
             name: name.to_string(),
             process_id,
             parent_process_id,
-            command_line: command_line.to_string(),
             executable_path: executable_path.to_string(),
-            main_window_title: main_window_title.to_string(),
+            trusted_desktop_executable,
+            has_visible_window,
+            started_recently: false,
         }
     }
 
@@ -861,31 +1067,21 @@ mod tests {
     }
 
     #[test]
-    fn parses_legacy_and_current_windows_process_snapshots() {
-        let processes = parse_windows_codex_processes(
-            r#"[
-                {"Name":"Codex.exe","ProcessId":10,"ParentProcessId":1,"CommandLine":"Codex.exe","MainWindowTitle":"Codex"},
-                {"Name":"ChatGPT.exe","ProcessId":20,"ParentProcessId":1,"CommandLine":"ChatGPT.exe","ExecutablePath":"C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\\app\\ChatGPT.exe","MainWindowTitle":"Codex"}
-            ]"#,
-        )
-        .expect("legacy and current process snapshots should parse");
-
-        assert_eq!(processes.len(), 2);
-        assert_eq!(processes[0].name, "Codex.exe");
-        assert!(processes[0].executable_path.is_empty());
-        assert_eq!(processes[1].name, "ChatGPT.exe");
-        assert!(processes[1].executable_path.ends_with(r"\app\ChatGPT.exe"));
+    fn decodes_null_terminated_toolhelp_names() {
+        assert_eq!(utf16_c_string(&[67, 111, 100, 101, 120, 0, 88]), "Codex");
+        assert_eq!(utf16_c_string(&[67, 111, 100, 101, 120]), "Codex");
     }
 
     #[test]
-    fn parses_single_windows_process_snapshot() {
-        let processes = parse_windows_codex_processes(
-            r#"{"Name":"Codex.exe","ProcessId":10,"ParentProcessId":1,"CommandLine":"Codex.exe","MainWindowTitle":"Codex"}"#,
-        )
-        .expect("single process snapshot should parse");
+    fn windows_startup_grace_period_has_safe_time_boundaries() {
+        const SECOND: u64 = super::WINDOWS_FILETIME_TICKS_PER_SECOND;
+        let now = 1_000 * SECOND;
 
-        assert_eq!(processes.len(), 1);
-        assert_eq!(processes[0].process_id, 10);
+        assert!(is_recent_windows_process_start(now, now));
+        assert!(is_recent_windows_process_start(now - 30 * SECOND, now));
+        assert!(!is_recent_windows_process_start(now - 31 * SECOND, now));
+        assert!(!is_recent_windows_process_start(now + SECOND, now));
+        assert!(!is_recent_windows_process_start(0, now));
     }
 
     #[test]
@@ -895,29 +1091,35 @@ mod tests {
             10,
             1,
             r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
-            r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe""#,
-            "Codex",
+            true,
         );
         let current_root = windows_process(
             "ChatGPT.exe",
             20,
             1,
             r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
-            r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
-            "Codex",
+            true,
         );
-        let current_root_from_command = windows_process(
-            "ChatGPT.exe",
+        let legacy_packaged_root = windows_process(
+            "Codex.exe",
             21,
             1,
-            "",
-            r#""D:\WindowsApps\OpenAI.Codex_26.707.9999.0_arm64__2p2nqsd0c76g0\app\ChatGPT.exe" --flag"#,
-            "Codex",
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.429.3425.0_x64__2p2nqsd0c76g0\app\Codex.exe",
+            true,
         );
 
-        assert!(is_windows_codex_root_process(&legacy_root));
-        assert!(is_windows_codex_root_process(&current_root));
-        assert!(is_windows_codex_root_process(&current_root_from_command));
+        assert!(is_windows_codex_root_process(
+            &legacy_root,
+            std::slice::from_ref(&legacy_root)
+        ));
+        assert!(is_windows_codex_root_process(
+            &current_root,
+            std::slice::from_ref(&current_root)
+        ));
+        assert!(is_windows_codex_root_process(
+            &legacy_packaged_root,
+            std::slice::from_ref(&legacy_packaged_root)
+        ));
     }
 
     #[test]
@@ -927,94 +1129,134 @@ mod tests {
             30,
             20,
             r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
-            "",
-            "",
-        );
-        let packaged_renderer = windows_process(
-            "ChatGPT.exe",
-            31,
-            20,
-            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
-            r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe" --type=renderer"#,
-            "",
+            false,
         );
         let unrelated_chatgpt = windows_process(
             "ChatGPT.exe",
             32,
             1,
             r"C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
-            r#""C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
-            "ChatGPT",
+            true,
         );
         let wrong_publisher = windows_process(
             "ChatGPT.exe",
             33,
             1,
             r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__notcodex\app\ChatGPT.exe",
-            "",
-            "Codex",
+            true,
         );
         let lookalike_outside_windows_apps = windows_process(
             "ChatGPT.exe",
             34,
             1,
             r"C:\Temp\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
-            "",
-            "Codex",
+            true,
         );
-        let spoofed_argument = windows_process(
-            "ChatGPT.exe",
+        let ide_helper = windows_process(
+            "Codex.exe",
             35,
             1,
-            "",
-            r#""C:\Program Files\ChatGPT\ChatGPT.exe" --inspect "C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
-            "ChatGPT",
+            r"C:\Users\test\.vscode\extensions\openai.chatgpt\bin\codex.exe",
+            false,
+        );
+        let unrelated_codex =
+            windows_process("Codex.exe", 36, 1, r"C:\Tools\Codex\Codex.exe", true);
+        let forged_legacy_suffix = windows_process(
+            "Codex.exe",
+            37,
+            1,
+            r"D:\Fake\AppData\Local\Programs\Codex\Codex.exe",
+            true,
+        );
+        let forged_store_suffix = windows_process(
+            "ChatGPT.exe",
+            38,
+            1,
+            r"D:\Fake\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+            true,
         );
 
-        assert!(!is_windows_codex_root_process(&bundled_backend));
-        assert!(!is_windows_codex_root_process(&packaged_renderer));
-        assert!(!is_windows_codex_root_process(&unrelated_chatgpt));
-        assert!(!is_windows_codex_root_process(&wrong_publisher));
-        assert!(!is_windows_codex_root_process(
-            &lookalike_outside_windows_apps
-        ));
-        assert!(!is_windows_codex_root_process(&spoofed_argument));
+        for process in [
+            bundled_backend,
+            unrelated_chatgpt,
+            wrong_publisher,
+            lookalike_outside_windows_apps,
+            ide_helper,
+            unrelated_codex,
+            forged_legacy_suffix,
+            forged_store_suffix,
+        ] {
+            assert!(!is_windows_codex_candidate(&process));
+        }
     }
 
     #[test]
-    fn classifies_legacy_and_current_windows_trees_by_root_pid() {
-        let processes = vec![
-            windows_process(
+    fn trusted_windows_install_layouts_cover_supported_fallbacks() {
+        for path in [
+            r"C:\Users\test\AppData\Local\Codex\Codex.exe",
+            r"C:\Users\test\AppData\Local\OpenAI\Codex\Codex.exe",
+            r"C:\Users\test\AppData\Local\OpenAI Codex\Codex.exe",
+            r"C:\Users\test\AppData\Local\Codex Desktop\Codex.exe",
+            r"C:\Users\test\AppData\Local\Programs\OpenAI Codex\Codex.exe",
+            r"C:\Program Files\Codex\Codex.exe",
+            r"C:\Program Files (x86)\OpenAI\Codex\Codex.exe",
+        ] {
+            assert!(is_windows_codex_candidate(&windows_process(
                 "Codex.exe",
-                100,
+                50,
                 1,
-                r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
-                r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe""#,
-                "",
-            ),
-            windows_process(
+                path,
+                false,
+            )));
+        }
+
+        assert!(is_windows_codex_candidate(&windows_process(
+            "ChatGPT.exe",
+            51,
+            1,
+            r"D:\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+            false,
+        )));
+        for path in [
+            r"C:\Users\test\AppData\Local\OpenAI\Codex\bin\codex.exe",
+            r"C:\Users\test\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe",
+            r"C:\Users\test\AppData\Local\Packages\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\LocalCache\Local\OpenAI\Codex\bin\codex.exe",
+        ] {
+            assert!(!is_windows_codex_candidate(&windows_process(
                 "Codex.exe",
-                101,
-                100,
-                r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
-                r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe" --type=renderer"#,
-                "",
-            ),
+                52,
+                1,
+                path,
+                true,
+            )));
+        }
+    }
+
+    #[test]
+    fn classifies_recent_legacy_startup_and_current_app_server() {
+        let mut legacy_startup = windows_process(
+            "Codex.exe",
+            100,
+            1,
+            r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
+            false,
+        );
+        legacy_startup.started_recently = true;
+        let processes = vec![
+            legacy_startup,
             windows_process(
                 "ChatGPT.exe",
                 200,
                 1,
                 r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
-                r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
-                "",
+                false,
             ),
             windows_process(
                 "Codex.exe",
                 201,
                 200,
                 r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
-                r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe" app-server"#,
-                "",
+                false,
             ),
         ];
 
@@ -1025,27 +1267,115 @@ mod tests {
     }
 
     #[test]
-    fn ignores_stale_legacy_and_current_windows_roots() {
+    fn helper_descendants_are_not_reported_as_additional_roots() {
+        let processes = vec![
+            windows_process(
+                "ChatGPT.exe",
+                200,
+                1,
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+                true,
+            ),
+            windows_process(
+                "Codex.exe",
+                201,
+                200,
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
+                false,
+            ),
+            windows_process(
+                "Codex.exe",
+                202,
+                201,
+                r"C:\Users\test\AppData\Local\OpenAI\Codex\bin\build\codex.exe",
+                false,
+            ),
+        ];
+
+        assert!(!is_windows_codex_root_process(&processes[2], &processes));
+        assert_eq!(classify_windows_codex_processes(&processes), (vec![200], 0));
+    }
+
+    #[test]
+    fn ignores_stale_roots_even_when_generic_helpers_remain() {
         let processes = vec![
             windows_process(
                 "Codex.exe",
                 100,
                 1,
                 r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
-                r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe""#,
-                "",
+                false,
+            ),
+            windows_process(
+                "Codex.exe",
+                101,
+                100,
+                r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
+                false,
             ),
             windows_process(
                 "ChatGPT.exe",
                 200,
                 1,
                 r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
-                r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
-                "",
+                false,
             ),
         ];
 
         assert_eq!(classify_windows_codex_processes(&processes), (vec![], 2));
+    }
+
+    #[test]
+    fn follows_process_trees_through_non_codex_intermediates() {
+        let processes = vec![
+            windows_process(
+                "ChatGPT.exe",
+                200,
+                1,
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+                false,
+            ),
+            windows_process("RuntimeBroker.exe", 201, 200, "", false),
+            windows_process(
+                "Codex.exe",
+                202,
+                201,
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
+                false,
+            ),
+            windows_process(
+                "Codex.exe",
+                203,
+                201,
+                r"C:\Users\test\AppData\Local\OpenAI\Codex\bin\codex.exe",
+                false,
+            ),
+        ];
+
+        assert!(!is_windows_codex_root_process(&processes[3], &processes));
+        assert_eq!(classify_windows_codex_processes(&processes), (vec![200], 0));
+    }
+
+    #[test]
+    fn refuses_to_force_close_codex_processes_without_a_trusted_path() {
+        let process = windows_process("Codex.exe", 100, 1, "", true);
+        assert!(!is_windows_codex_candidate(&process));
+    }
+
+    #[test]
+    fn process_tree_cycles_do_not_loop_or_create_extra_roots() {
+        let processes = vec![
+            windows_process(
+                "Codex.exe",
+                100,
+                101,
+                r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
+                false,
+            ),
+            windows_process("RuntimeBroker.exe", 101, 100, "", false),
+        ];
+
+        assert_eq!(classify_windows_codex_processes(&processes), (vec![], 0));
     }
 
     #[test]
@@ -1061,40 +1391,25 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn detects_chatgpt_desktop_root_without_counting_helpers() {
-        let root = super::WindowsCodexProcess {
-            name: "ChatGPT.exe".to_string(),
-            process_id: 1,
-            parent_process_id: 0,
-            command_line: r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#.to_string(),
-            executable_path: r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe".to_string(),
-            main_window_title: "ChatGPT".to_string(),
-        };
-        assert!(super::is_windows_codex_root_process(&root));
-
-        let renderer = super::WindowsCodexProcess {
-            command_line: format!("{} --type=renderer", root.command_line),
-            ..root.clone()
-        };
-        assert!(!super::is_windows_codex_root_process(&renderer));
-
-        let app_server = super::WindowsCodexProcess {
-            name: "codex.exe".to_string(),
-            command_line: r#""C:\Program Files\WindowsApps\OpenAI.Codex_1\app\resources\codex.exe" app-server"#.to_string(),
-            ..root
-        };
-        assert!(!super::is_windows_codex_root_process(&app_server));
+    fn native_windows_snapshot_is_bounded_and_well_formed() {
+        let processes = super::read_windows_process_snapshot()
+            .expect("native Windows process snapshot should succeed");
+        let mut pids = std::collections::HashSet::new();
+        assert!(!processes.is_empty());
+        assert!(processes
+            .iter()
+            .all(|process| !process.name.is_empty() && pids.insert(process.process_id)));
     }
 }
 
 #[cfg(any(windows, test))]
 fn windows_has_descendant_matching<F>(
     root_pid: u32,
-    processes: &[WindowsCodexProcess],
+    processes: &[WindowsProcessEntry],
     mut predicate: F,
 ) -> bool
 where
-    F: FnMut(&WindowsCodexProcess) -> bool,
+    F: FnMut(&WindowsProcessEntry) -> bool,
 {
     let mut queue = vec![root_pid];
     let mut visited = HashSet::new();
@@ -1184,23 +1499,18 @@ fn find_windows_codex_app() -> Option<std::path::PathBuf> {
             candidates.push(base.join("Programs").join("codex").join("Codex.exe"));
             candidates.push(base.join("Codex").join("Codex.exe"));
             candidates.push(base.join("OpenAI").join("Codex").join("Codex.exe"));
-            candidates.push(
-                base.join("OpenAI")
-                    .join("Codex")
-                    .join("bin")
-                    .join("codex.exe"),
-            );
             candidates.push(base.join("OpenAI Codex").join("Codex.exe"));
             candidates.push(base.join("Codex Desktop").join("Codex.exe"));
         }
     }
 
     candidates.extend(find_windows_codex_apps_in_programs());
-    candidates.extend(find_windows_codex_apps_in_package_cache());
 
-    candidates
-        .into_iter()
-        .find(|path| path.is_file() && looks_like_windows_desktop_app(path))
+    candidates.into_iter().find(|path| {
+        path.is_file()
+            && looks_like_windows_desktop_app(path)
+            && is_windows_legacy_codex_desktop_path(&path.to_string_lossy())
+    })
 }
 
 #[cfg(windows)]
@@ -1209,30 +1519,9 @@ fn looks_like_windows_desktop_app(path: &std::path::Path) -> bool {
         return false;
     };
 
-    if is_windows_openai_codex_bin(path) {
-        return true;
-    }
-
     parent.join("resources").join("app.asar").is_file()
         || parent.join("resources").join("app").is_dir()
         || parent.join("resources").is_dir()
-}
-
-#[cfg(windows)]
-fn is_windows_openai_codex_bin(path: &std::path::Path) -> bool {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-
-    if !file_name.eq_ignore_ascii_case("codex.exe") {
-        return false;
-    }
-
-    let normalized = path
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    normalized.contains("\\openai\\codex\\bin\\codex.exe")
 }
 
 #[cfg(windows)]
@@ -1315,42 +1604,6 @@ fn find_windows_codex_apps_in_programs() -> Vec<std::path::PathBuf> {
 
     let programs = std::path::PathBuf::from(local_app_data).join("Programs");
     collect_windows_codex_apps(&programs, &mut candidates, 0);
-    candidates
-}
-
-#[cfg(windows)]
-fn find_windows_codex_apps_in_package_cache() -> Vec<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-
-    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
-        return candidates;
-    };
-
-    let packages = std::path::PathBuf::from(local_app_data).join("Packages");
-    let Ok(entries) = std::fs::read_dir(packages) else {
-        return candidates;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(dir_name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-
-        if !dir_name.to_ascii_lowercase().starts_with("openai.codex_") {
-            continue;
-        }
-
-        candidates.push(
-            path.join("LocalCache")
-                .join("Local")
-                .join("OpenAI")
-                .join("Codex")
-                .join("bin")
-                .join("codex.exe"),
-        );
-    }
-
     candidates
 }
 

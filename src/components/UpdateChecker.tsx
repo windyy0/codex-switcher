@@ -14,7 +14,7 @@ type UpdateStatus =
 
 const MANUAL_UPDATE_CHECK_EVENT = "codex-switcher:check-for-update";
 const IGNORED_UPDATE_VERSION_STORAGE_KEY = "codex-switcher:ignored-update-version";
-const FULL_CHANGELOG_URL = "https://github.com/windyy0/codex-switcher/blob/main/CHANGELOG.md";
+const TAGGED_CHANGELOG_URL = "https://github.com/windyy0/codex-switcher/blob/";
 
 function formatReleaseHighlights(body: string): string {
   return body
@@ -151,8 +151,11 @@ export function UpdateChecker() {
     }
   };
 
-  const handleOpenFullChangelog = () => {
-    void openExternalUrl(FULL_CHANGELOG_URL).catch((err) => {
+  const handleOpenFullChangelog = (version: string) => {
+    const releaseTag = version.startsWith("v") ? version : `v${version}`;
+    void openExternalUrl(
+      `${TAGGED_CHANGELOG_URL}${encodeURIComponent(releaseTag)}/CHANGELOG.md`
+    ).catch((err) => {
       console.error("Failed to open changelog:", err);
     });
   };
@@ -212,7 +215,7 @@ export function UpdateChecker() {
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <button
-                onClick={handleOpenFullChangelog}
+                onClick={() => handleOpenFullChangelog(status.update.version)}
                 className="text-xs font-medium text-blue-600 transition-colors hover:text-blue-700 hover:underline dark:text-blue-400 dark:hover:text-blue-300"
               >
                 {t("updates.viewFullChangelog")} ↗

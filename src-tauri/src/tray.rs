@@ -16,6 +16,8 @@ use crate::{
 
 static TRAY_USAGE: LazyLock<Mutex<HashMap<String, UsageInfo>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static PENDING_SWITCH_REQUEST: LazyLock<Mutex<Option<SwitchAccountRequestedPayload>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 const TRAY_ID: &str = "codex-switcher-tray";
 #[cfg(not(target_os = "macos"))]
@@ -24,6 +26,7 @@ const TRAY_ICON: tauri::image::Image<'static> = tauri::include_image!("./icons/t
 const TRAY_ICON: tauri::image::Image<'static> = tauri::include_image!("./icons/tray-template.png");
 const ACCOUNTS_CHANGED_EVENT: &str = "accounts-changed";
 const SWITCH_ACCOUNT_REQUESTED_EVENT: &str = "tray-switch-account-requested";
+const ACCOUNT_USAGE_UPDATED_EVENT: &str = "account-usage-updated";
 const OPEN_PAGE_EVENT: &str = "tray-open-page";
 const ACCOUNT_ITEM_PREFIX: &str = "account:";
 const OPEN_ITEM_ID: &str = "open";
@@ -40,8 +43,27 @@ const MAX_MENU_ACCOUNT_NAME_CHARS: usize = 28;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SwitchAccountRequestedPayload {
+pub struct SwitchAccountRequestedPayload {
     account_id: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TrayAccountSwitchStatus {
+    Switched,
+    Blocked,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayAccountSwitchOutcome {
+    status: TrayAccountSwitchStatus,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountUsageUpdatedPayload {
+    usage: UsageInfo,
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
@@ -304,18 +326,87 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 return;
             }
 
-            // Let the already-running main webview handle the request. It owns a
-            // process-state snapshot that is refreshed every five seconds, so a
-            // blocked switch can open its confirmation immediately instead of
-            // waiting for two consecutive PowerShell/CIM process scans.
-            let _ = app.emit(
-                SWITCH_ACCOUNT_REQUESTED_EVENT,
-                SwitchAccountRequestedPayload {
-                    account_id: account_id.to_string(),
-                },
-            );
+            queue_switch_account_request(app, account_id);
         }
     }
+}
+
+fn queue_switch_account_request<R: Runtime>(app: &AppHandle<R>, account_id: &str) {
+    let payload = SwitchAccountRequestedPayload {
+        account_id: account_id.to_string(),
+    };
+
+    if let Ok(mut pending) = PENDING_SWITCH_REQUEST.lock() {
+        // Only the latest unclaimed choice matters. Once the frontend claims a
+        // request it is processed serially, while later clicks remain queued here.
+        *pending = Some(payload.clone());
+    } else {
+        eprintln!("Failed to queue tray account switch request");
+        return;
+    }
+
+    // This event is only a wake-up signal. The request remains in Rust until the
+    // frontend explicitly claims it, so startup-time events cannot be lost.
+    let _ = app.emit(SWITCH_ACCOUNT_REQUESTED_EVENT, ());
+}
+
+/// Claim the latest account switch requested from the native tray menu.
+#[tauri::command]
+pub fn take_pending_tray_switch_request() -> Option<SwitchAccountRequestedPayload> {
+    PENDING_SWITCH_REQUEST
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.take())
+}
+
+/// Execute a tray switch and return a stable status instead of asking the
+/// frontend to parse a localized/backend error message.
+#[tauri::command]
+pub async fn switch_account_from_tray(
+    app: AppHandle,
+    account_id: String,
+) -> Result<TrayAccountSwitchOutcome, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::commands::switch_account_by_id(&account_id)
+    })
+    .await
+    .map_err(|error| format!("Tray account switch task failed: {error}"))?;
+
+    match result {
+        Ok(()) => {
+            sync_active_account_displays(&app);
+            Ok(TrayAccountSwitchOutcome {
+                status: TrayAccountSwitchStatus::Switched,
+            })
+        }
+        Err(error) if crate::commands::process::is_codex_running_switch_block(&error) => {
+            Ok(TrayAccountSwitchOutcome {
+                status: TrayAccountSwitchStatus::Blocked,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn sync_active_account_displays<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "windows")]
+    {
+        let active_usage = load_accounts()
+            .ok()
+            .and_then(|store| store.active_account_id)
+            .and_then(|account_id| {
+                TRAY_USAGE
+                    .lock()
+                    .ok()
+                    .and_then(|cache| cache.get(&account_id).cloned())
+            });
+        if let Some(usage) = active_usage.as_ref() {
+            crate::taskbar_widget::ingest_usage(usage);
+        } else {
+            crate::taskbar_widget::refresh_active_account();
+        }
+    }
+    refresh_menu(app);
 }
 
 fn recent_switch_accounts(store: &AccountsStore) -> Vec<&StoredAccount> {
@@ -389,8 +480,11 @@ fn refresh_active_account(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         match fetch_usage_cached(&account_id, true).await {
             Ok(usage) => {
-                ingest_usage(&app_handle, vec![usage]);
-                let _ = app_handle.emit(ACCOUNTS_CHANGED_EVENT, ());
+                ingest_usage(&app_handle, vec![usage.clone()]);
+                let _ = app_handle.emit(
+                    ACCOUNT_USAGE_UPDATED_EVENT,
+                    AccountUsageUpdatedPayload { usage },
+                );
             }
             Err(error) => eprintln!("Failed to refresh active account from tray: {error}"),
         }
@@ -669,6 +763,36 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_switch_payload_and_outcome_have_stable_wire_formats() {
+        let request = SwitchAccountRequestedPayload {
+            account_id: "account-1".to_string(),
+        };
+        let outcome = TrayAccountSwitchOutcome {
+            status: TrayAccountSwitchStatus::Blocked,
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({ "accountId": "account-1" })
+        );
+        assert_eq!(
+            serde_json::to_value(outcome).unwrap(),
+            serde_json::json!({ "status": "blocked" })
+        );
+    }
+
+    #[test]
+    fn pending_tray_switch_remains_available_until_claimed() {
+        *PENDING_SWITCH_REQUEST.lock().unwrap() = Some(SwitchAccountRequestedPayload {
+            account_id: "queued-account".to_string(),
+        });
+
+        let request = take_pending_tray_switch_request().expect("request should remain queued");
+        assert_eq!(request.account_id, "queued-account");
+        assert!(take_pending_tray_switch_request().is_none());
+    }
 
     #[test]
     fn embedded_tray_icon_is_not_an_opaque_block() {

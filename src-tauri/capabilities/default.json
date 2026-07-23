@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main and tray windows",
-  "windows": ["main", "tray", "floating", "floating-controls"],
+  "description": "Capability for the application windows",
+  "windows": ["main", "floating", "floating-controls"],
   "permissions": [
     "core:default",
     "core:window:default",

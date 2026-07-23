@@ -25,10 +25,10 @@ use commands::{
     get_account_usage_stats, get_active_account_info, get_api_account_config, get_app_language,
     get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage,
     import_accounts_full_encrypted_file, import_accounts_slim_text, kill_codex_processes,
-    list_accounts, open_main_window, quit_app, refresh_account_metadata,
-    refresh_all_accounts_usage, rename_account, report_usage, set_account_disabled,
-    set_api_account_config, set_app_language, set_app_settings, set_dock_display_mode,
-    set_masked_account_ids, start_login, switch_account, warmup_account, warmup_all_accounts,
+    list_accounts, open_main_window, refresh_account_metadata, refresh_all_accounts_usage,
+    rename_account, report_usage, set_account_disabled, set_api_account_config, set_app_language,
+    set_app_settings, set_dock_display_mode, set_masked_account_ids, start_login, switch_account,
+    warmup_account, warmup_all_accounts,
 };
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -71,19 +71,6 @@ pub fn run() {
                 floating::setup(app.handle())?;
                 #[cfg(target_os = "windows")]
                 taskbar_widget::setup(app.handle());
-
-                // The plugin restores on window-ready. Reapply once after the
-                // desktop helpers finish initializing so Windows also keeps a
-                // restored maximized state through startup-time window setup.
-                if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
-                    use tauri_plugin_window_state::WindowExt;
-
-                    window.restore_state(
-                        tauri_plugin_window_state::StateFlags::SIZE
-                            | tauri_plugin_window_state::StateFlags::POSITION
-                            | tauri_plugin_window_state::StateFlags::MAXIMIZED,
-                    )?;
-                }
             }
             Ok(())
         })
@@ -145,8 +132,9 @@ pub fn run() {
             kill_codex_processes,
             // Tray integration
             open_main_window,
-            quit_app,
             report_usage,
+            tray::take_pending_tray_switch_request,
+            tray::switch_account_from_tray,
             get_dock_display_mode,
             set_dock_display_mode,
             complete_close_behavior,

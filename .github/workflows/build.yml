@@ -11,12 +11,97 @@ on:
         required: true
         type: string
 
+# Every release writes the shared `releases/latest` updater endpoint. Serialize all
+# releases, plus each platform matrix, so neither platforms nor versions can race.
+concurrency:
+  group: codex-switcher-release
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: Verify release source and draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Test release tooling
+        run: node --test scripts/release.test.mjs
+
+      - name: Verify source and prepare draft
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          node scripts/release.mjs --verify "$RELEASE_TAG"
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          release_notes="$(node scripts/release-notes.mjs "$RELEASE_TAG" "$GITHUB_REPOSITORY")"
+
+          release_json="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+              jq -s --arg tag "$RELEASE_TAG" 'add | map(select(.tag_name == $tag)) | .[0] // null'
+          )"
+          if [ "$release_json" != "null" ]; then
+            if [ "$(jq -r '.draft' <<<"$release_json")" != "true" ]; then
+              echo "Release $RELEASE_TAG is already published; refusing to replace its assets." >&2
+              exit 1
+            fi
+            release_id="$(jq -r '.id' <<<"$release_json")"
+            draft_target="$(jq -r '.target_commitish // ""' <<<"$release_json")"
+            if [[ "$draft_target" =~ ^[0-9a-fA-F]{40}$ ]] && [ "${draft_target,,}" != "${tag_commit,,}" ]; then
+              echo "Draft release $RELEASE_TAG points at a different commit; refusing to reuse it." >&2
+              exit 1
+            fi
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -f name="$RELEASE_TAG" -f body="$release_notes" \
+              -f target_commitish="$tag_commit" -F prerelease=false >/dev/null
+            while IFS= read -r asset_id; do
+              [ -z "$asset_id" ] && continue
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >/dev/null
+            done < <(
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+                --jq '.[].id'
+            )
+          else
+            release_id="$(
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name="$RELEASE_TAG" \
+                -f target_commitish="$(git rev-parse HEAD)" \
+                -f name="$RELEASE_TAG" \
+                -f body="$release_notes" \
+                -F draft=true \
+                -F prerelease=false \
+                --jq '.id'
+            )"
+          fi
+
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
+
   publish:
+    needs: prepare
     permissions:
       contents: write
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - platform: macos-latest
@@ -35,8 +120,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - name: Checkout
+      - name: Checkout the release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -60,26 +147,20 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Determine tag
-        id: tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          fi
+        run: pnpm install --frozen-lockfile
 
       - name: Read release highlights
         id: release_notes
         shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
+          set -euo pipefail
+          delimiter="CODEX_SWITCHER_RELEASE_NOTES_${RANDOM}_${RANDOM}"
           {
-            echo 'body<<CODEX_SWITCHER_RELEASE_NOTES'
-            node scripts/release-notes.mjs "${{ steps.tag.outputs.tag }}"
-            echo 'CODEX_SWITCHER_RELEASE_NOTES'
+            printf 'body<<%s\n' "$delimiter"
+            node scripts/release-notes.mjs "$RELEASE_TAG" "$GITHUB_REPOSITORY"
+            printf '%s\n' "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and release
@@ -89,13 +170,76 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ steps.tag.outputs.tag }}
-          releaseName: ${{ steps.tag.outputs.tag }}
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: ${{ needs.prepare.outputs.tag }}
           releaseBody: ${{ steps.release_notes.outputs.body }}
           generateReleaseNotes: false
-          releaseDraft: false
+          # Keep the release hidden until every platform and updater entry is ready.
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           updaterJsonKeepUniversal: true
           retryAttempts: 3
           args: --target ${{ matrix.target }}
+
+  finalize:
+    name: Publish completed release
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify updater manifest and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          release_state="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          if [ "$(jq -r '.tag_name' <<<"$release_state")" != "$RELEASE_TAG" ] || \
+             [ "$(jq -r '.draft' <<<"$release_state")" != "true" ]; then
+            echo "Release ID $RELEASE_ID is not the expected draft for $RELEASE_TAG." >&2
+            exit 1
+          fi
+
+          published_tags="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name'
+          )"
+          if [ -n "$published_tags" ]; then
+            while IFS= read -r published_tag; do
+              [ -z "$published_tag" ] && continue
+              node scripts/release.mjs --assert-newer-tag "$RELEASE_TAG" "$published_tag"
+            done <<<"$published_tags"
+          else
+            echo "No published release exists yet; treating $RELEASE_TAG as the first release."
+          fi
+
+          mapfile -t manifest_assets < <(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
+              --jq '.[] | select(.name == "latest.json") | .id'
+          )
+          if [ "${#manifest_assets[@]}" -ne 1 ]; then
+            echo "Expected exactly one latest.json asset, found ${#manifest_assets[@]}." >&2
+            exit 1
+          fi
+          gh api \
+            -H 'Accept: application/octet-stream' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${manifest_assets[0]}" \
+            > latest.json
+          node scripts/verify-updater-manifest.mjs latest.json "$RELEASE_TAG" "$GITHUB_REPOSITORY"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false -F prerelease=false -f make_latest=legacy

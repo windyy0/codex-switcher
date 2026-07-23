@@ -10,14 +10,12 @@ interface KillCodexProcessesResult {
 }
 
 interface UseForceCloseCodexProcessesOptions {
-  processCount: number;
   checkProcesses: () => Promise<CodexProcessInfo | null>;
   showToast: (message: string, isError?: boolean) => void;
   formatError: (err: unknown) => string;
 }
 
 export function useForceCloseCodexProcesses({
-  processCount,
   checkProcesses,
   showToast,
   formatError,
@@ -33,20 +31,28 @@ export function useForceCloseCodexProcesses({
         "kill_codex_processes"
       );
       const latestProcessInfo = await checkProcesses();
-      const remainingCount = latestProcessInfo?.count ?? 0;
-      const closedCount = Math.max(0, processCount - remainingCount);
+      if (!latestProcessInfo) {
+        // A successful kill command is not enough to claim that switching is
+        // safe.  If the follow-up process check failed, keep the result
+        // unknown instead of treating it as an empty process list.
+        showToast(i18n.t("warmup.processCheckFailed"), true);
+        return null;
+      }
+      const remainingCount = latestProcessInfo.count;
+      const targetedCount = result.targeted_count;
+      const closedCount = Math.max(0, targetedCount - remainingCount);
 
       if (result.targeted_count === 0) {
         showToast(i18n.t("forceClose.noneFound"));
       } else if (remainingCount === 0) {
         showToast(
-          i18n.t("forceClose.closed", { count: processCount })
+          i18n.t("forceClose.closed", { count: targetedCount })
         );
       } else if (closedCount > 0) {
         showToast(
           i18n.t("forceClose.partial", {
             closed: closedCount,
-            total: processCount,
+            total: targetedCount,
             remaining: remainingCount,
           }),
           true
@@ -67,7 +73,7 @@ export function useForceCloseCodexProcesses({
       setConfirmOpen(false);
       setIsForceClosing(false);
     }
-  }, [checkProcesses, formatError, processCount, showToast]);
+  }, [checkProcesses, formatError, showToast]);
 
   return {
     forceCloseConfirmOpen: confirmOpen,

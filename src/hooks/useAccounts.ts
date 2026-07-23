@@ -8,6 +8,12 @@ import type {
 } from "../types";
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 
+const ACCOUNT_USAGE_UPDATED_EVENT = "account-usage-updated";
+
+interface AccountUsageUpdatedPayload {
+  usage?: UsageInfo;
+}
+
 export function useAccounts() {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -147,7 +153,7 @@ export function useAccounts() {
           );
 
           list = (await loadAccounts(true)).filter(
-            (account) => account.auth_mode === "chat_g_p_t"
+            (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
           );
         }
 
@@ -498,19 +504,57 @@ export function useAccounts() {
   }, [loadAccounts, refreshUsage]);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    let unlistenAccounts: (() => void) | undefined;
+    let unlistenUsage: (() => void) | undefined;
 
     void (async () => {
       if (!("__TAURI_INTERNALS__" in window)) return;
       const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen("accounts-changed", () => {
+      const unlistenAccountsEvent = await listen("accounts-changed", () => {
         void loadAccounts(true).catch((err) => {
           console.error("Failed to reload accounts after change:", err);
         });
       });
+      if (disposed) {
+        unlistenAccountsEvent();
+        return;
+      }
+      unlistenAccounts = unlistenAccountsEvent;
+      const unlistenUsageEvent = await listen<AccountUsageUpdatedPayload>(
+        ACCOUNT_USAGE_UPDATED_EVENT,
+        ({ payload }) => {
+          const usage = payload?.usage;
+          if (!usage || typeof usage.account_id !== "string") return;
+          const refreshedAt = Date.now();
+          setAccounts((prev) =>
+            prev.map((account) =>
+              account.id === usage.account_id
+                ? {
+                    ...account,
+                    usage,
+                    usageLoading: false,
+                    usageUpdatedAt: usage.error
+                      ? account.usageUpdatedAt
+                      : refreshedAt,
+                  }
+                : account
+            )
+          );
+        }
+      );
+      if (disposed) {
+        unlistenUsageEvent();
+        return;
+      }
+      unlistenUsage = unlistenUsageEvent;
     })();
 
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlistenAccounts?.();
+      unlistenUsage?.();
+    };
   }, [loadAccounts]);
 
   return {

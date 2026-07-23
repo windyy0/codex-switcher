@@ -92,7 +92,7 @@
   "warmup": {
     "warming": "预热中...", "autoOn": "自动：开", "autoOff": "自动：关", "autoPaused": "自动：已暂停", "autoSession": "自动：5 小时", "autoWeekly": "自动：每周", "windowSession": "5 小时", "windowWeekly": "每周", "autoWarming": "自动预热中...",
     "waitingWeekly": "等待每周额度重置", "timedWarming": "定时预热中...", "timedOff": "定时：关", "timedNext": "定时：{{time}}",
-    "switchedFromTray": "已从托盘切换账户。", "switchFailed": "切换失败：{{error}}", "switchBlocked": "账户切换被阻止。",
+    "switchedFromTray": "已从托盘切换账户。", "refreshFailed": "刷新失败：{{error}}", "switchFailed": "切换失败：{{error}}", "switchBlocked": "账户切换被阻止。", "processCheckFailed": "无法确认 Codex 运行状态，请稍后重试。",
     "closeFailed": "关闭失败：{{error}}", "switchedAfterClose": "强制关闭 Codex 后已切换账户。", "switchAfterCloseFailed": "强制关闭后切换失败：{{error}}",
     "sentFor": "已为 {{name}} 发送预热请求", "failedFor": "{{name}} 预热失败：{{error}}", "noneAvailable": "没有可预热的账户",
     "sentForAll": "已为全部 {{count}} 个账户发送预热请求", "sentForAll_other": "已为全部 {{count}} 个账户发送预热请求",
@@ -150,7 +150,7 @@
   },
   "accountCard": {
     "never": "从未", "justNow": "刚刚", "secondsAgo": "{{count}} 秒前", "minutesAgo": "{{count}} 分钟前", "hoursAgo": "{{count}} 小时前",
-    "expiryUnavailable": "到期时间不可用", "expired": "已于 {{date}} 到期", "until": "有效期至 {{date}}", "resetCount": "{{count}} 次重置",
+    "expiryUnavailable": "暂无到期信息", "expired": "已于 {{date}} 到期", "until": "有效期至 {{date}}", "resetCount": "{{count}} 次重置",
     "resetCount_other": "{{count}} 次重置", "closest": "最近 {{date}}", "closestExpires": "最近一批于 {{date}} 到期", "apiKey": "API 密钥",
     "rename": "点击重命名", "disabled": "已停用", "disable": "停用", "enable": "启用", "disableAccount": "停用账户", "enableAccount": "重新启用账户", "enableBeforeSwitch": "请先启用此账户再切换", "disabledDescription": "此账户已停用，自动请求和预热均已暂停，但保存的数据仍会保留。", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "apiUsageManagedExternally": "API Key 账户不提供统一的用量和订阅信息，请前往对应服务商后台查看。", "active": "当前使用",
     "closeProcesses": "请先关闭所有 Codex 进程", "switching": "切换中...", "codexRunning": "Codex 正在运行", "switch": "切换",
@@ -174,12 +174,6 @@
     "checking": "正在检查更新...", "upToDate": "Codex Switcher 已是最新版本。",
     "available": "发现新版本：v{{version}}", "versionTransition": "当前 v{{current}} → 最新 v{{latest}}", "highlights": "本次更新重点", "noReleaseNotes": "此版本暂未提供更新说明。", "viewFullChangelog": "查看完整更新记录",
     "update": "立即更新", "ignoreVersion": "忽略此版本", "downloading": "正在下载更新...", "ready": "更新已就绪，重启后生效。", "failed": "更新失败：{{error}}"
-  },
-  "tray": {
-    "loading": "正在加载...", "noAccounts": "尚未配置账户", "session": "会话", "weekly": "每周",
-    "resetsNow": "现在重置", "resetsIn": "{{time}} 后重置", "usageUnavailable": "用量不可用", "apiKeyManagedExternally": "API 用量请前往服务商后台查看",
-    "today": "今天", "lastSevenDays": "最近 7 天", "dock": "程序坞", "show": "显示", "menuBar": "菜单栏",
-    "openApp": "打开 Codex Switcher", "quit": "退出"
   },
   "stats": {
     "source": "通过 ChatGPT 后端获取的 Codex 用量统计", "chatgptOnly": "用量统计仅适用于 ChatGPT 账户。", "unavailable": "用量统计不可用。",

@@ -157,6 +157,7 @@ export default function FloatingWidget() {
     const unlistenSettings = listen<AppSettings>("floating-settings-changed", ({ payload }) => setSettings(payload));
     const unlistenAppSettings = listen<AppSettings>("settings-changed", ({ payload }) => setSettings(payload));
     const unlistenAccounts = listen("accounts-changed", () => void refresh());
+    const unlistenUsage = listen("account-usage-updated", () => void refresh());
     return () => {
       window.clearInterval(timer);
       if (expandTimer.current !== null) window.clearTimeout(expandTimer.current);
@@ -164,6 +165,7 @@ export default function FloatingWidget() {
       void unlistenSettings.then((fn) => fn());
       void unlistenAppSettings.then((fn) => fn());
       void unlistenAccounts.then((fn) => fn());
+      void unlistenUsage.then((fn) => fn());
     };
   }, [refresh]);
 

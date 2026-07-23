@@ -60,6 +60,12 @@ function getSubscriptionStatus(timestamp: string | null | undefined, t: TFunctio
   }
 
   const expiryDate = new Date(timestamp);
+  if (Number.isNaN(expiryDate.getTime())) {
+    return {
+      label: t("accountCard.expiryUnavailable"),
+      className: "text-gray-400 dark:text-gray-500",
+    };
+  }
   const formattedDate = new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
@@ -218,6 +224,8 @@ export function AccountCard({
     setIsRefreshing(true);
     try {
       await onRefresh();
+    } catch (error) {
+      console.error("Failed to refresh account usage:", error);
     } finally {
       setIsRefreshing(false);
     }
