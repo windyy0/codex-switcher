@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scriptDirectory, "..");
 const changelogPath = path.join(root, "CHANGELOG.md");
+const englishChangelogPath = path.join(root, "CHANGELOG.en.md");
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const CHANGELOG_HEADING_PATTERN =
   /^## \[([^\]]+)\](?:[ \t]+-[ \t]+[^\r\n]+)?[ \t]*(?:\r?$)/gm;
@@ -36,7 +37,10 @@ function getHeadings(contents) {
   }));
 }
 
-export function assertValidChangelog(contents) {
+export function assertValidChangelog(
+  contents,
+  { unreleasedLabel = "未发布", changelogName = "CHANGELOG.md" } = {}
+) {
   const headings = getHeadings(contents);
   const counts = new Map();
   for (const heading of headings) {
@@ -47,12 +51,14 @@ export function assertValidChangelog(contents) {
     .filter(([, count]) => count > 1)
     .map(([label]) => label);
   if (duplicates.length > 0) {
-    throw new Error(`CHANGELOG.md 包含重复章节：${duplicates.join("、")}`);
+    throw new Error(`${changelogName} 包含重复章节：${duplicates.join("、")}`);
   }
 
-  const unreleased = headings.filter((heading) => heading.label === "未发布");
+  const unreleased = headings.filter((heading) => heading.label === unreleasedLabel);
   if (unreleased.length !== 1) {
-    throw new Error("CHANGELOG.md 必须且只能包含一个“## [未发布]”章节");
+    throw new Error(
+      `${changelogName} 必须且只能包含一个“## [${unreleasedLabel}]”章节`
+    );
   }
 
   return headings;
@@ -67,17 +73,21 @@ function getSectionBody(contents, headings, headingIndex) {
     .trim();
 }
 
-export function extractReleaseNotes(contents, versionInput) {
+export function extractReleaseNotes(
+  contents,
+  versionInput,
+  { unreleasedLabel = "未发布", changelogName = "CHANGELOG.md" } = {}
+) {
   const version = assertValidVersion(versionInput);
-  const headings = assertValidChangelog(contents);
+  const headings = assertValidChangelog(contents, { unreleasedLabel, changelogName });
   const headingIndex = headings.findIndex((heading) => heading.label === version);
   if (headingIndex === -1) {
-    throw new Error(`CHANGELOG.md 中找不到版本 ${version}`);
+    throw new Error(`${changelogName} 中找不到版本 ${version}`);
   }
 
   const body = getSectionBody(contents, headings, headingIndex);
   if (!body) {
-    throw new Error(`CHANGELOG.md 中的版本 ${version} 没有更新内容`);
+    throw new Error(`${changelogName} 中的版本 ${version} 没有更新内容`);
   }
 
   return body;
@@ -86,7 +96,8 @@ export function extractReleaseNotes(contents, versionInput) {
 export function formatReleaseNotesForPublication(
   contents,
   versionInput,
-  repository = process.env.GITHUB_REPOSITORY ?? "windyy0/codex-switcher"
+  repository = process.env.GITHUB_REPOSITORY ?? "windyy0/codex-switcher",
+  englishContents = null
 ) {
   const version = assertValidVersion(versionInput);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
@@ -94,36 +105,65 @@ export function formatReleaseNotesForPublication(
   }
 
   const notes = extractReleaseNotes(contents, version);
-  return `${notes}\n\n完整更新记录：https://github.com/${repository}/blob/v${version}/CHANGELOG.md`;
+  if (englishContents == null) {
+    return `${notes}\n\n完整更新记录：https://github.com/${repository}/blob/v${version}/CHANGELOG.md`;
+  }
+
+  const englishNotes = extractReleaseNotes(englishContents, version, {
+    unreleasedLabel: "Unreleased",
+    changelogName: "CHANGELOG.en.md",
+  });
+  return [
+    [
+      "### 中文更新",
+      "<!-- codex-switcher-release-notes:zh-CN -->",
+      notes,
+    ].join("\n\n"),
+    [
+      "### English updates",
+      "<!-- codex-switcher-release-notes:en-US -->",
+      englishNotes,
+    ].join("\n\n"),
+    [
+      "<!-- codex-switcher-release-notes:links -->",
+      `完整更新记录：https://github.com/${repository}/blob/v${version}/CHANGELOG.md`,
+      `Full changelog: https://github.com/${repository}/blob/v${version}/CHANGELOG.en.md`,
+    ].join("\n\n"),
+  ].join("\n\n");
 }
 
 export function finalizeUnreleasedSection(
   contents,
   versionInput,
-  releaseDate = formatLocalDate()
+  releaseDate = formatLocalDate(),
+  { unreleasedLabel = "未发布", changelogName = "CHANGELOG.md" } = {}
 ) {
   const version = assertValidVersion(versionInput);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) {
     throw new Error(`无效的发布日期：${releaseDate}`);
   }
 
-  const headings = assertValidChangelog(contents);
+  const headings = assertValidChangelog(contents, { unreleasedLabel, changelogName });
   if (headings.some((heading) => heading.label === version)) {
-    throw new Error(`CHANGELOG.md 已包含版本 ${version}`);
+    throw new Error(`${changelogName} 已包含版本 ${version}`);
   }
 
-  const unreleasedIndex = headings.findIndex((heading) => heading.label === "未发布");
+  const unreleasedIndex = headings.findIndex(
+    (heading) => heading.label === unreleasedLabel
+  );
   const unreleasedHeading = headings[unreleasedIndex];
   const unreleasedBody = getSectionBody(contents, headings, unreleasedIndex);
   if (!/^\s*-\s+\S/m.test(unreleasedBody)) {
-    throw new Error("CHANGELOG.md 的“未发布”章节没有可发布的更新条目");
+    throw new Error(
+      `${changelogName} 的“${unreleasedLabel}”章节没有可发布的更新条目`
+    );
   }
 
   const nextHeading = headings[unreleasedIndex + 1];
   const history = nextHeading ? contents.slice(nextHeading.index).trimStart() : "";
   const prefix = contents.slice(0, unreleasedHeading.index);
   const releasedSection = [
-    "## [未发布]",
+    `## [${unreleasedLabel}]`,
     "",
     `## [${version}] - ${releaseDate}`,
     "",
@@ -148,8 +188,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   try {
     const contents = fs.readFileSync(changelogPath, "utf8");
+    const englishContents = fs.readFileSync(englishChangelogPath, "utf8");
     process.stdout.write(
-      `${formatReleaseNotesForPublication(contents, version, process.argv[3])}\n`
+      `${formatReleaseNotesForPublication(
+        contents,
+        version,
+        process.argv[3],
+        englishContents
+      )}\n`
     );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

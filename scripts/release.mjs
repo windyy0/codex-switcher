@@ -7,6 +7,7 @@ import {
   extractReleaseNotes,
   finalizeUnreleasedSection,
   formatLocalDate,
+  formatReleaseNotesForPublication,
 } from "./release-notes.mjs";
 
 const root = process.cwd();
@@ -17,7 +18,8 @@ const VERSION_FILES = [
   "src-tauri/Cargo.lock",
 ];
 const CHANGELOG_FILE = "CHANGELOG.md";
-const RELEASE_FILES = [...VERSION_FILES, CHANGELOG_FILE];
+const ENGLISH_CHANGELOG_FILE = "CHANGELOG.en.md";
+const RELEASE_FILES = [...VERSION_FILES, CHANGELOG_FILE, ENGLISH_CHANGELOG_FILE];
 
 const readFile = (relativePath) =>
   fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -142,8 +144,25 @@ export function createReleasePlan(fileContents, input, releaseDate = formatLocal
     nextVersion,
     releaseDate
   );
-  const releaseNotes = extractReleaseNotes(updatedChangelog, nextVersion);
-  return { currentVersion, nextVersion, releaseNotes, updatedChangelog };
+  const updatedEnglishChangelog = finalizeUnreleasedSection(
+    fileContents[ENGLISH_CHANGELOG_FILE],
+    nextVersion,
+    releaseDate,
+    { unreleasedLabel: "Unreleased", changelogName: ENGLISH_CHANGELOG_FILE }
+  );
+  const releaseNotes = formatReleaseNotesForPublication(
+    updatedChangelog,
+    nextVersion,
+    undefined,
+    updatedEnglishChangelog
+  );
+  return {
+    currentVersion,
+    nextVersion,
+    releaseNotes,
+    updatedChangelog,
+    updatedEnglishChangelog,
+  };
 }
 
 function readReleaseFiles() {
@@ -196,6 +215,10 @@ function verifyExistingRelease(tag) {
   const files = readReleaseFiles();
   assertVersionsMatch(files, version);
   const releaseNotes = extractReleaseNotes(files[CHANGELOG_FILE], version);
+  extractReleaseNotes(files[ENGLISH_CHANGELOG_FILE], version, {
+    unreleasedLabel: "Unreleased",
+    changelogName: ENGLISH_CHANGELOG_FILE,
+  });
   console.log(`已验证发布 ${tag}：版本文件一致，更新日志存在。`);
   console.log("发布重点：");
   console.log(releaseNotes);
@@ -254,6 +277,11 @@ function createRelease(input, shouldPush) {
     fs.writeFileSync(
       path.join(root, CHANGELOG_FILE),
       plan.updatedChangelog,
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(root, ENGLISH_CHANGELOG_FILE),
+      plan.updatedEnglishChangelog,
       "utf8"
     );
     assertVersionsMatch(readReleaseFiles(), plan.nextVersion);

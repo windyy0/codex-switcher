@@ -41,10 +41,12 @@
 <table>
   <tr>
     <td align="center"><strong>悬浮窗</strong></td>
+    <td align="center"><strong>悬浮窗-紧凑</strong></td>
     <td align="center"><strong>任务栏模式</strong></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/floating-window.png" alt="Codex Switcher 悬浮窗"></td>
+    <td align="center"><img src="docs/screenshots/floating-window-small.png" alt="Codex Switcher 悬浮窗-紧凑"></td>
     <td align="center"><img src="docs/screenshots/taskbar.png" alt="Codex Switcher 任务栏模式"></td>
   </tr>
 </table>
@@ -164,24 +166,19 @@ caffeinate -i -w "$(pgrep -x 'Codex Switcher')"
 
 使用本软件即表示你同意你是添加到应用程序中的所有账户的合法所有者。作者对任何滥用行为或违反 OpenAI 服务条款的行为不承担任何责任。
 
-## 版本管理
+## 开发与发布
 
-使用版本号更新助手在 Tauri、Cargo 和前端之间保持应用版本同步。
+### 更新日志
 
-```bash
-# 精确版本号
-pnpm version:bump 0.2.1
+- 开发中的内容只写入 `CHANGELOG.md` 的 `[未发布]` 和 `CHANGELOG.en.md` 的 `[Unreleased]`，两份文件使用相同的版本记录和对应语言内容。
+- 发布前先提交当前代码；发布脚本要求工作区干净，不需要手动改版本号或移动日志章节。
+- 发布脚本会自动把未发布内容归档到版本号和日期下，创建新的未发布章节，并生成中英文 Release Notes。
 
-# 语义化版本递增
-pnpm version:patch
-pnpm version:minor
-pnpm version:major
+### 版本与发布命令
 
-# 准备发布提交和标签
-# 此命令会自动先执行版本号更新。
-pnpm release patch
-
-# 准备并推送发布
-# 此命令会自动先执行版本号更新。
+# 创建发布提交、标签并推送；也可传入明确版本号，如 0.106.0
 pnpm release patch -- --push
+pnpm release 0.106.0 -- --push
 ```
+
+推送 `vX.Y.Z` 标签后，GitHub Actions 会校验中英文日志、构建各平台安装包、生成签名和 `latest.json`，全部成功后才会发布 GitHub Release。

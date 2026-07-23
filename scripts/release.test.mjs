@@ -31,6 +31,12 @@ function createFiles(overrides = {}) {
       "- 新增发布校验\n\n" +
       "## [1.2.3] - 2026-07-22\n\n" +
       "- 上一个版本\n",
+    "CHANGELOG.en.md":
+      "# Changelog\n\n" +
+      "## [Unreleased]\n\n" +
+      "- Add release validation\n\n" +
+      "## [1.2.3] - 2026-07-22\n\n" +
+      "- Previous version\n",
     ...overrides,
   };
 }
@@ -99,9 +105,14 @@ test("release planning validates everything before returning updated contents", 
   assert.deepEqual(files, originalSnapshot);
   assert.equal(plan.currentVersion, "1.2.3");
   assert.equal(plan.nextVersion, "1.3.0");
-  assert.equal(plan.releaseNotes, "- 新增发布校验");
+  assert.match(plan.releaseNotes, /- 新增发布校验/);
+  assert.match(plan.releaseNotes, /- Add release validation/);
   assert.match(
     plan.updatedChangelog,
+    /## \[1\.3\.0\] - 2026-07-23/
+  );
+  assert.match(
+    plan.updatedEnglishChangelog,
     /## \[1\.3\.0\] - 2026-07-23/
   );
 });
@@ -134,12 +145,18 @@ test("published release notes include an exact-version changelog link", () => {
   const notes = formatReleaseNotesForPublication(
     createFiles()["CHANGELOG.md"],
     "v1.2.3",
-    "example/codex-switcher"
+    "example/codex-switcher",
+    createFiles()["CHANGELOG.en.md"]
   );
   assert.match(
     notes,
     /完整更新记录：https:\/\/github\.com\/example\/codex-switcher\/blob\/v1\.2\.3\/CHANGELOG\.md/
   );
+  assert.match(
+    notes,
+    /Full changelog: https:\/\/github\.com\/example\/codex-switcher\/blob\/v1\.2\.3\/CHANGELOG\.en\.md/
+  );
+  assert.match(notes, /codex-switcher-release-notes:en-US/);
 });
 
 test("updater manifest requires every signed platform for the exact tag", () => {
@@ -155,7 +172,7 @@ test("updater manifest requires every signed platform for the exact tag", () => 
   const manifest = JSON.stringify({
     version: "1.2.3",
     notes:
-      "- 修复切换问题\n\n完整更新记录：https://github.com/example/project/blob/v1.2.3/CHANGELOG.md",
+      "<!-- codex-switcher-release-notes:zh-CN -->\n- 修复切换问题\n\n<!-- codex-switcher-release-notes:en-US -->\n- Fix switching\n\n完整更新记录：https://github.com/example/project/blob/v1.2.3/CHANGELOG.md\nFull changelog: https://github.com/example/project/blob/v1.2.3/CHANGELOG.en.md",
     pub_date: "2026-07-23T00:00:00.000Z",
     platforms,
   });
@@ -168,7 +185,7 @@ test("updater manifest requires every signed platform for the exact tag", () => 
   const missingWindows = JSON.stringify({
     version: "1.2.3",
     notes:
-      "- 修复切换问题\n\n完整更新记录：https://github.com/example/project/blob/v1.2.3/CHANGELOG.md",
+      "<!-- codex-switcher-release-notes:zh-CN -->\n- 修复切换问题\n\n<!-- codex-switcher-release-notes:en-US -->\n- Fix switching\n\n完整更新记录：https://github.com/example/project/blob/v1.2.3/CHANGELOG.md\nFull changelog: https://github.com/example/project/blob/v1.2.3/CHANGELOG.en.md",
     platforms: Object.fromEntries(
       Object.entries(platforms).filter(([platform]) => platform !== "windows-x86_64")
     ),

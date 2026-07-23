@@ -39,10 +39,12 @@
 <table>
   <tr>
     <td align="center"><strong>Floating Window</strong></td>
+    <td align="center"><strong>Compact Floating Window</strong></td>
     <td align="center"><strong>Taskbar Mode</strong></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/floating-window.png" alt="Codex Switcher floating window"></td>
+    <td align="center"><img src="docs/screenshots/floating-window-small.png" alt="Codex Switcher compact floating window"></td>
     <td align="center"><img src="docs/screenshots/taskbar.png" alt="Codex Switcher taskbar mode"></td>
   </tr>
 </table>
@@ -193,24 +195,31 @@ This tool is designed **exclusively for individuals who personally own multiple 
 
 By using this software, you agree that you are the rightful owner of all accounts you add to the application. The authors are not responsible for any misuse or violations of OpenAI's terms of service.
 
-## Versioning
+## Development and releases
 
-Use the version bump helper to keep app versions in sync across Tauri, Cargo, and the frontend.
+### Changelog workflow
+
+- Keep unreleased work in `[未发布]` in `CHANGELOG.md` and `[Unreleased]` in `CHANGELOG.en.md`, with matching versions and equivalent content in each language.
+- Commit the current code before releasing; the release script requires a clean worktree, and you should not edit version numbers or move changelog sections by hand.
+- The release script archives the unreleased sections under the release version and date, creates fresh unreleased sections, and generates bilingual release notes.
+
+### Version and release commands
 
 ```bash
-# Exact version
-pnpm version:bump 0.2.1
+# Release checks
+pnpm test:release
+pnpm check:i18n:strict
+pnpm build
 
-# Semver bumps
-pnpm version:patch
-pnpm version:minor
-pnpm version:major
+# Commit the current feature work
+git add -A
+git commit -m "Describe the change"
 
-# Prepare a release commit and tag
-# This automatically runs the version bump first.
-pnpm release patch
-
-# Prepare and push a release
-# This automatically runs the version bump first.
+# Create the release commit and tag, then push them; an exact version is also supported.
 pnpm release patch -- --push
+pnpm release 0.106.0 -- --push
 ```
+
+After the `vX.Y.Z` tag is pushed, GitHub Actions validates both changelogs, builds the platform installers, creates signatures and `latest.json`, and publishes the GitHub Release only after all checks succeed.
+
+These commands are equivalent to running `node scripts/release.mjs <version> --push` directly.

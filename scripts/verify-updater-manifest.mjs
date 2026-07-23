@@ -39,10 +39,17 @@ export function verifyUpdaterManifest(
   if (typeof manifest.notes !== "string" || !manifest.notes.trim()) {
     throw new Error("latest.json 缺少本次更新重点");
   }
-  const expectedChangelogUrl =
-    `https://github.com/${repository}/blob/${tagInput}/CHANGELOG.md`;
-  if (!manifest.notes.includes(expectedChangelogUrl)) {
+  const expectedChangelogUrls = [
+    `https://github.com/${repository}/blob/${tagInput}/CHANGELOG.md`,
+    `https://github.com/${repository}/blob/${tagInput}/CHANGELOG.en.md`,
+  ];
+  if (expectedChangelogUrls.some((url) => !manifest.notes.includes(url))) {
     throw new Error("latest.json 缺少当前版本的完整更新记录链接");
+  }
+  for (const locale of ["zh-CN", "en-US"]) {
+    if (!manifest.notes.includes(`codex-switcher-release-notes:${locale}`)) {
+      throw new Error(`latest.json 缺少 ${locale} 更新说明`);
+    }
   }
   if (!manifest.platforms || typeof manifest.platforms !== "object") {
     throw new Error("latest.json 缺少 platforms 对象");

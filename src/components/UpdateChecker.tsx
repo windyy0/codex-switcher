@@ -15,9 +15,30 @@ type UpdateStatus =
 const MANUAL_UPDATE_CHECK_EVENT = "codex-switcher:check-for-update";
 const IGNORED_UPDATE_VERSION_STORAGE_KEY = "codex-switcher:ignored-update-version";
 const TAGGED_CHANGELOG_URL = "https://github.com/windyy0/codex-switcher/blob/";
+type ReleaseLocale = "zh-CN" | "en-US";
 
-function formatReleaseHighlights(body: string): string {
-  return body
+function resolveReleaseLocale(language: string | undefined): ReleaseLocale {
+  return language?.toLowerCase().startsWith("en") ? "en-US" : "zh-CN";
+}
+
+function selectLocalizedReleaseNotes(body: string, locale: ReleaseLocale): string {
+  const markerPattern = /<!-- codex-switcher-release-notes:(zh-CN|en-US|links) -->/g;
+  const markers = [...body.matchAll(markerPattern)];
+  if (markers.length === 0) return body;
+
+  const sections = new Map<string, string>();
+  for (let index = 0; index < markers.length; index += 1) {
+    const marker = markers[index];
+    const start = marker.index + marker[0].length;
+    const end = markers[index + 1]?.index ?? body.length;
+    sections.set(marker[1], body.slice(start, end).trim());
+  }
+
+  return sections.get(locale) ?? sections.get("zh-CN") ?? body;
+}
+
+function formatReleaseHighlights(body: string, locale: ReleaseLocale): string {
+  return selectLocalizedReleaseNotes(body, locale)
     .trim()
     .split(/\r?\n/)
     .map((line) =>
@@ -54,7 +75,7 @@ export function requestUpdateCheck() {
 }
 
 export function UpdateChecker() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [status, setStatus] = useState<UpdateStatus>({ kind: "idle" });
   const [dismissed, setDismissed] = useState(false);
 
@@ -154,7 +175,11 @@ export function UpdateChecker() {
   const handleOpenFullChangelog = (version: string) => {
     const releaseTag = version.startsWith("v") ? version : `v${version}`;
     void openExternalUrl(
-      `${TAGGED_CHANGELOG_URL}${encodeURIComponent(releaseTag)}/CHANGELOG.md`
+      `${TAGGED_CHANGELOG_URL}${encodeURIComponent(releaseTag)}/${
+        resolveReleaseLocale(i18n.language) === "en-US"
+          ? "CHANGELOG.en.md"
+          : "CHANGELOG.md"
+      }`
     ).catch((err) => {
       console.error("Failed to open changelog:", err);
     });
@@ -208,7 +233,10 @@ export function UpdateChecker() {
               </p>
               <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-gray-600 dark:text-gray-300">
                 {status.update.body
-                  ? formatReleaseHighlights(status.update.body)
+                  ? formatReleaseHighlights(
+                      status.update.body,
+                      resolveReleaseLocale(i18n.language)
+                    )
                   : t("updates.noReleaseNotes")}
               </div>
             </div>
