@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.106.1] - 2026-07-26
+
 ### Added
 
 - Added an optional dual-zone clock that shows local time and OpenAI/UTC time, date, and weekday in the title bar.
