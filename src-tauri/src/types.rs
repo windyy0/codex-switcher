@@ -234,6 +234,10 @@ fn default_close_behavior_prompt_enabled() -> bool {
     true
 }
 
+fn default_show_dual_clock() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -242,6 +246,8 @@ pub struct AppSettings {
     pub language: AppLanguage,
     #[serde(default = "default_close_behavior_prompt_enabled")]
     pub close_behavior_prompt_enabled: bool,
+    #[serde(default = "default_show_dual_clock")]
+    pub show_dual_clock: bool,
     pub taskbar: TaskbarSettings,
     pub floating: FloatingSettings,
 }
@@ -253,6 +259,7 @@ impl Default for AppSettings {
             dock_display_mode: DockDisplayMode::default(),
             language: AppLanguage::default(),
             close_behavior_prompt_enabled: true,
+            show_dual_clock: false,
             taskbar: TaskbarSettings::default(),
             floating: FloatingSettings::default(),
         }
@@ -688,6 +695,7 @@ mod tests {
         assert_eq!(settings.dock_display_mode, DockDisplayMode::ShowInDock);
         assert_eq!(settings.language, AppLanguage::default());
         assert!(settings.close_behavior_prompt_enabled);
+        assert!(!settings.show_dual_clock);
         assert!(settings.taskbar.enabled);
         assert_eq!(settings.taskbar.offset_x, 0);
         assert_eq!(settings.taskbar.offset_y, 0);

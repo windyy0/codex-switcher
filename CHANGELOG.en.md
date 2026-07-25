@@ -6,6 +6,18 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Added
+
+- Added an optional dual-zone clock that shows local time and OpenAI/UTC time, date, and weekday in the title bar.
+
+### Improved
+
+- Centered the dual-zone clock in the title bar, limited the display to minutes, and collapsed it on narrow windows.
+
+### Fixed
+
+- Fixed Windows installs and silent updates recreating a desktop shortcut after the user removed it.
+
 ## [0.106.0] - 2026-07-23
 
 ### Added

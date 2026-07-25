@@ -11,6 +11,7 @@ export interface AppSettings {
   dock_display_mode: DockDisplayMode;
   language: string;
   close_behavior_prompt_enabled: boolean;
+  show_dual_clock: boolean;
   taskbar: {
     enabled: boolean;
     layout: TaskbarLayout;

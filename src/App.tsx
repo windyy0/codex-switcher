@@ -6,6 +6,8 @@ import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses
 import { AccountCard, AccountRow, AddAccountModal, UpdateChecker, requestUpdateCheck } from "./components";
 import { SelectMenu } from "./components/SelectMenu";
 import { WindowsDisplaySettings } from "./components/WindowsDisplaySettings";
+import { TimeDisplay } from "./components/TimeDisplay";
+import { TimeDisplaySettings } from "./components/TimeDisplaySettings";
 import type {
   AccountWithUsage,
   CodexProcessInfo,
@@ -2223,7 +2225,7 @@ function App() {
           </div>
         ) : (
           <div className={`mx-auto max-w-5xl px-3 ${isMacOs ? "pl-20" : ""}`}>
-            <div className="flex h-12 items-center gap-3">
+            <div className="relative flex h-12 items-center gap-3">
               <h1 className="shrink-0 text-xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
                 Codex Switcher
               </h1>
@@ -2232,6 +2234,7 @@ function App() {
                 onDoubleClick={handleTitlebarDoubleClick}
                 className="h-10 min-w-4 flex-1 cursor-default select-none"
               />
+              <TimeDisplay />
               {windowControls}
             </div>
 
@@ -2558,6 +2561,7 @@ function App() {
                 />
               </div>
             </section>
+            <TimeDisplaySettings />
             {isWindows && <WindowsDisplaySettings section="floating" />}
             {isWindows && <WindowsDisplaySettings section="taskbar" />}
             <section>
