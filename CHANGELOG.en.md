@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.106.2] - 2026-07-26
+
 ### Fixed
 
 - Fixed a startup race that could leave the language selector on “System Default” after the saved language was loaded asynchronously.
