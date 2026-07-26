@@ -6,6 +6,11 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows in-app updates falling back to MSI and recreating a deleted desktop shortcut; updates now consistently use the NSIS installer.
+- Fixed the “Minimize” tooltip appearing after restoring the main window from the taskbar when the pointer is not over the button.
+
 ## [0.106.3] - 2026-07-26
 
 ### Improved

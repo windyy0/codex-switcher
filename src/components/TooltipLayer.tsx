@@ -78,7 +78,13 @@ export function TooltipLayer() {
     };
     const onFocusIn = (event: FocusEvent) => {
       const element = tooltipTarget(event.target);
-      if (element) show(element, false);
+      // Mouse clicks can leave a button focused while the window is
+      // minimized. When the window is restored from the taskbar, that
+      // focus is restored too, which would incorrectly show the tooltip
+      // even though the pointer is no longer over the button. Keep focus
+      // tooltips for keyboard navigation, while hover tooltips continue
+      // to cover pointer interactions.
+      if (element && element.matches(":focus-visible")) show(element, false);
     };
     const onFocusOut = (event: FocusEvent) => {
       if (tooltipTarget(event.target)) hide();

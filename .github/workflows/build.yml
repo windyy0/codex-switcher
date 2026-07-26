@@ -181,6 +181,10 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
+          # Keep the generic Windows updater entry on the NSIS installer.
+          # This is also the safe fallback for binaries whose bundle marker
+          # cannot be detected by the updater.
+          updaterJsonPreferNsis: true
           updaterJsonKeepUniversal: true
           retryAttempts: 3
           args: --target ${{ matrix.target }}
