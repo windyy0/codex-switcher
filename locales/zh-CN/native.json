@@ -21,6 +21,7 @@
   "usageUnavailable": "暂无额度数据",
   "apiUsageManagedExternally": "API 用量由服务商管理",
   "fiveHourRemaining": "5 小时剩余 {percent}",
+  "monthlyRemaining": "每月剩余 {percent}",
   "weeklyRemaining": "每周剩余 {percent}",
   "openApp": "打开 Codex Switcher",
   "switchAccount": "切换账户",

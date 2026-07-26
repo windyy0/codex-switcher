@@ -504,17 +504,27 @@ impl AccountInfo {
             }
             AuthData::ApiKey { .. } => None,
         };
+        let subscription_expires_at = account
+            .subscription_expires_at
+            .clone()
+            .or(fallback_subscription_expires_at);
+        let plan_type = if account.auth_mode == AuthMode::ChatGPT
+            && subscription_expires_at
+                .as_ref()
+                .is_some_and(|expires_at| *expires_at <= Utc::now())
+        {
+            Some("free".to_string())
+        } else {
+            account.plan_type.clone()
+        };
 
         Self {
             id: account.id.clone(),
             name: account.name.clone(),
             disabled: account.disabled,
             email: account.email.clone(),
-            plan_type: account.plan_type.clone(),
-            subscription_expires_at: account
-                .subscription_expires_at
-                .clone()
-                .or(fallback_subscription_expires_at),
+            plan_type,
+            subscription_expires_at,
             auth_mode: account.auth_mode,
             is_active: active_id == Some(&account.id),
             created_at: account.created_at,
@@ -651,10 +661,11 @@ pub struct CreditStatusDetails {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_chatgpt_id_token_claims, AppLanguage, AppSettings, DockDisplayMode, FloatingSettings,
-        StoredAccount, TrayDisplayMode,
+        parse_chatgpt_id_token_claims, AccountInfo, AppLanguage, AppSettings, DockDisplayMode,
+        FloatingSettings, StoredAccount, TrayDisplayMode,
     };
     use base64::Engine;
+    use chrono::{Duration, Utc};
 
     #[test]
     fn parses_subscription_expiry_from_realistic_id_token_claims() {
@@ -673,6 +684,42 @@ mod tests {
                 .map(|value| value.to_rfc3339()),
             Some("2026-04-23T05:03:38+00:00".to_string())
         );
+    }
+
+    #[test]
+    fn expired_paid_subscription_is_presented_as_free() {
+        let account = StoredAccount::new_chatgpt(
+            "Expired Plus".into(),
+            None,
+            Some("plus".into()),
+            Some(Utc::now() - Duration::minutes(1)),
+            "id-token".into(),
+            "access-token".into(),
+            "refresh-token".into(),
+            None,
+        );
+
+        let info = AccountInfo::from_stored(&account, None);
+
+        assert_eq!(info.plan_type.as_deref(), Some("free"));
+    }
+
+    #[test]
+    fn unexpired_paid_subscription_keeps_its_plan() {
+        let account = StoredAccount::new_chatgpt(
+            "Active Plus".into(),
+            None,
+            Some("plus".into()),
+            Some(Utc::now() + Duration::minutes(1)),
+            "id-token".into(),
+            "access-token".into(),
+            "refresh-token".into(),
+            None,
+        );
+
+        let info = AccountInfo::from_stored(&account, None);
+
+        assert_eq!(info.plan_type.as_deref(), Some("plus"));
     }
 
     #[test]

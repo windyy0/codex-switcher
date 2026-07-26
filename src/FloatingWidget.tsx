@@ -8,6 +8,8 @@ import {
 } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { getEffectivePlanType } from "./lib/accountPlan";
+import { isMonthlyWindow } from "./lib/usageWindow";
 import { invokeBackend } from "./lib/platform";
 import type { AccountInfo, AppSettings, UsageInfo } from "./types";
 
@@ -198,7 +200,10 @@ export default function FloatingWidget() {
   );
   const activeReset = hasPrimaryWindow
     ? usage?.primary_resets_at != null
-      ? { kind: "session" as const, timestamp: usage.primary_resets_at }
+      ? {
+          kind: isMonthlyWindow(usage.primary_window_minutes) ? ("monthly" as const) : ("session" as const),
+          timestamp: usage.primary_resets_at,
+        }
       : null
     : hasSecondaryWindow && usage?.secondary_resets_at != null
       ? { kind: "weekly" as const, timestamp: usage.secondary_resets_at }
@@ -217,7 +222,15 @@ export default function FloatingWidget() {
     []
   );
   const compactUsage = primary !== null
-    ? { value: primary, label: t("usage.compactFiveHour", { percent: `${primary}%` }) }
+    ? {
+        value: primary,
+        label: t(
+          isMonthlyWindow(usage?.primary_window_minutes)
+            ? "usage.compactMonthly"
+            : "usage.compactFiveHour",
+          { percent: `${primary}%` }
+        ),
+      }
     : secondary !== null
       ? { value: secondary, label: t("usage.compactWeekly", { percent: `${secondary}%` }) }
       : { value: null, label: t("usage.compactUnavailable") };
@@ -237,9 +250,10 @@ export default function FloatingWidget() {
     Math.min(2.5, (expandedLayoutWidth - FLOATING_HORIZONTAL_PADDING) / FLOATING_BASE_CONTENT_WIDTH)
   );
   const isApiKeyAccount = account?.auth_mode === "api_key";
-  const planKey = account?.plan_type?.toLowerCase() ?? (isApiKeyAccount ? "api_key" : "free");
-  const planDisplay = account?.plan_type
-    ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
+  const effectivePlanType = account ? getEffectivePlanType(account) : null;
+  const planKey = effectivePlanType?.toLowerCase() ?? (isApiKeyAccount ? "api_key" : "free");
+  const planDisplay = effectivePlanType
+    ? effectivePlanType.charAt(0).toUpperCase() + effectivePlanType.slice(1)
     : account?.auth_mode === "api_key"
       ? t("accountCard.apiKey")
       : null;
@@ -729,7 +743,12 @@ export default function FloatingWidget() {
           </div>
         ) : (
           <div className="space-y-3">
-            {showPrimaryUsage && <UsageRow label={t("usage.fiveHour")} value={primary} />}
+            {showPrimaryUsage && (
+              <UsageRow
+                label={isMonthlyWindow(usage?.primary_window_minutes) ? t("usage.monthly") : t("usage.fiveHour")}
+                value={primary}
+              />
+            )}
             {showSecondaryUsage && <UsageRow label={t("usage.weekly")} value={secondary} />}
             {showActiveReset && activeReset && (
               <div className="relative flex justify-end" onMouseLeave={() => setResetTooltipVisible(false)}>
@@ -744,9 +763,11 @@ export default function FloatingWidget() {
                 >
                   <ClockIcon />
                   {t(
-                    activeReset.kind === "session"
-                      ? "usage.sessionResetCountdown"
-                      : "usage.weeklyResetCountdown",
+                    activeReset.kind === "monthly"
+                      ? "usage.monthlyResetCountdown"
+                      : activeReset.kind === "session"
+                        ? "usage.sessionResetCountdown"
+                        : "usage.weeklyResetCountdown",
                     { time: resetLabel(activeReset.timestamp, t) }
                   )}
                 </button>

@@ -20,6 +20,7 @@ static PENDING_SWITCH_REQUEST: LazyLock<Mutex<Option<SwitchAccountRequestedPaylo
     LazyLock::new(|| Mutex::new(None));
 
 const TRAY_ID: &str = "codex-switcher-tray";
+const MONTHLY_WINDOW_MINUTES_THRESHOLD: i64 = 28 * 24 * 60;
 #[cfg(not(target_os = "macos"))]
 const TRAY_ICON: tauri::image::Image<'static> = tauri::include_image!("./icons/tray.png");
 #[cfg(target_os = "macos")]
@@ -457,7 +458,15 @@ fn active_account_usage_summary(account: &StoredAccount, language_code: &str) ->
 
     let mut parts = Vec::new();
     if let Some(percent) = remaining_percent_label(usage.primary_used_percent) {
-        parts.push(t("fiveHourRemaining").replace("{percent}", &percent));
+        let key = if usage
+            .primary_window_minutes
+            .is_some_and(|minutes| minutes >= MONTHLY_WINDOW_MINUTES_THRESHOLD)
+        {
+            "monthlyRemaining"
+        } else {
+            "fiveHourRemaining"
+        };
+        parts.push(t(key).replace("{percent}", &percent));
     }
     if let Some(percent) = remaining_percent_label(usage.secondary_used_percent) {
         parts.push(t("weeklyRemaining").replace("{percent}", &percent));
@@ -657,16 +666,31 @@ fn active_usage_title(active_account_id: Option<&str>) -> String {
 
     match usage {
         Some(usage) if usage.error.is_none() => {
-            usage_title(usage.primary_used_percent, usage.secondary_used_percent)
+            usage_title(
+                usage.primary_used_percent,
+                usage.secondary_used_percent,
+                usage.primary_window_minutes,
+            )
         }
         _ => "H:-- W:--".to_string(),
     }
 }
 
-fn usage_title(primary_used_percent: Option<f64>, secondary_used_percent: Option<f64>) -> String {
+fn usage_title(
+    primary_used_percent: Option<f64>,
+    secondary_used_percent: Option<f64>,
+    primary_window_minutes: Option<i64>,
+) -> String {
     let mut parts = Vec::new();
     if let Some(remaining) = remaining_percent_label(primary_used_percent) {
-        parts.push(format!("H:{remaining}"));
+        let prefix = if primary_window_minutes
+            .is_some_and(|minutes| minutes >= MONTHLY_WINDOW_MINUTES_THRESHOLD)
+        {
+            "M"
+        } else {
+            "H"
+        };
+        parts.push(format!("{prefix}:{remaining}"));
     }
     if let Some(remaining) = remaining_percent_label(secondary_used_percent) {
         parts.push(format!("W:{remaining}"));
@@ -752,7 +776,14 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
             match tauri::async_runtime::block_on(fetch_usage_cached(&account.id, false)) {
                 // Keep the last known title on transient fetch errors.
                 Ok(usage) => ingest_usage(&app, vec![usage]),
-                Err(error) => eprintln!("Failed to poll usage for tray title: {error}"),
+                Err(error) => {
+                    eprintln!("Failed to poll usage for tray title: {error}");
+                    #[cfg(target_os = "windows")]
+                    crate::taskbar_widget::ingest_usage(&UsageInfo::error(
+                        account.id.clone(),
+                        error.to_string(),
+                    ));
+                }
             }
         }
 
@@ -870,10 +901,11 @@ mod tests {
 
     #[test]
     fn usage_title_omits_missing_windows() {
-        assert_eq!(usage_title(Some(27.0), Some(82.0)), "H:73% W:18%");
-        assert_eq!(usage_title(None, Some(35.0)), "W:65%");
-        assert_eq!(usage_title(Some(27.0), None), "H:73%");
-        assert_eq!(usage_title(None, None), "H:-- W:--");
+        assert_eq!(usage_title(Some(27.0), Some(82.0), Some(5 * 60)), "H:73% W:18%");
+        assert_eq!(usage_title(None, Some(35.0), None), "W:65%");
+        assert_eq!(usage_title(Some(27.0), None, Some(5 * 60)), "H:73%");
+        assert_eq!(usage_title(Some(27.0), None, Some(30 * 24 * 60)), "M:73%");
+        assert_eq!(usage_title(None, None, None), "H:-- W:--");
     }
 
     #[test]

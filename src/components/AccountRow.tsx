@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import type { AccountWithUsage } from "../types";
+import { getEffectivePlanType } from "../lib/accountPlan";
+import { isMonthlyWindow } from "../lib/usageWindow";
 
 interface AccountRowProps {
   account: AccountWithUsage;
@@ -136,7 +138,7 @@ function AccountQuota({ account }: { account: AccountWithUsage }) {
       )}
       {hasSession && (
         <QuotaLine
-          label={t("usage.fiveHour")}
+          label={isMonthlyWindow(account.usage.primary_window_minutes) ? t("usage.monthly") : t("usage.fiveHour")}
           usedPercent={account.usage.primary_used_percent}
           resetsAt={account.usage.primary_resets_at}
         />
@@ -146,12 +148,13 @@ function AccountQuota({ account }: { account: AccountWithUsage }) {
 }
 
 function planPresentation(account: AccountWithUsage, t: TFunction) {
-  const plan = account.plan_type
-    ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
+  const effectivePlanType = getEffectivePlanType(account);
+  const plan = effectivePlanType
+    ? effectivePlanType.charAt(0).toUpperCase() + effectivePlanType.slice(1)
     : account.auth_mode === "api_key"
       ? t("accountCard.apiKey")
       : t("common.unknown");
-  const key = account.plan_type?.toLowerCase() || (account.auth_mode === "api_key" ? "api_key" : "free");
+  const key = effectivePlanType?.toLowerCase() || (account.auth_mode === "api_key" ? "api_key" : "free");
   const colors: Record<string, string> = {
     pro: "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
     plus: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
@@ -171,13 +174,17 @@ function formatExpiry(expiresAt: string | null | undefined, locale: string, t: T
   if (Number.isNaN(expiry.getTime())) {
     return { label: t("accounts.expiryUnavailable"), tone: "text-gray-400 dark:text-gray-500" };
   }
-  const label = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(expiry);
   const remaining = expiry.getTime() - Date.now();
   const tone = remaining <= 3 * 86400000
     ? "text-red-600 dark:text-red-400"
     : remaining <= 7 * 86400000
       ? "text-amber-600 dark:text-amber-400"
       : "text-gray-600 dark:text-gray-300";
+  const label = new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    ...(remaining <= 3 * 86400000 ? { hour: "2-digit", minute: "2-digit" } : {}),
+  }).format(expiry);
   return { label, tone };
 }
 
@@ -241,7 +248,7 @@ export function AccountRow({
         : `grid min-h-20 grid-cols-1 items-center gap-3 border-b border-gray-100 px-4 py-2.5 transition-colors last:border-b-0 dark:border-gray-800/80 ${
             isApiAccount
               ? "md:grid-cols-[minmax(0,1.15fr)_minmax(16rem,1.6fr)_auto]"
-              : "md:grid-cols-[minmax(0,1.15fr)_minmax(16rem,1.6fr)_7rem_auto]"
+              : "md:grid-cols-[minmax(0,1.15fr)_minmax(16rem,1.6fr)_11rem_auto]"
           } ${
             account.is_active
               ? "bg-emerald-50/45 dark:bg-emerald-950/15"

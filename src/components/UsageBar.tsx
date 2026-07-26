@@ -1,6 +1,7 @@
 import type { UsageInfo } from "../types";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { isMonthlyWindow } from "../lib/usageWindow";
 
 interface UsageBarProps {
   usage?: UsageInfo;
@@ -133,7 +134,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     <div className="space-y-2">
       {hasPrimary && (
         <RateLimitBar
-          label={t("usage.fiveHour")}
+          label={isMonthlyWindow(usage.primary_window_minutes) ? t("usage.monthly") : t("usage.fiveHour")}
           usedPercent={usage.primary_used_percent!}
           windowMinutes={usage.primary_window_minutes}
           resetsAt={usage.primary_resets_at}

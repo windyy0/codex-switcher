@@ -1,4 +1,5 @@
 import type { UsageInfo } from "../types";
+import { isMonthlyWindow } from "./usageWindow";
 
 const DEFAULT_SESSION_WINDOW_MINUTES = 5 * 60;
 const DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
@@ -6,7 +7,7 @@ const FULL_WINDOW_SLACK_MINUTES = 5;
 const LIMIT_FULL_THRESHOLD = 99.5;
 const MIN_SUCCESS_INTERVAL_MS = 60 * 60 * 1000;
 
-export type AutoWarmupWindowKind = "session" | "weekly";
+export type AutoWarmupWindowKind = "session" | "monthly" | "weekly";
 
 export interface AutoWarmupWindow {
   kind: AutoWarmupWindowKind;
@@ -44,7 +45,9 @@ export function getAutoWarmupWindowKind(
   usage: UsageInfo | undefined
 ): AutoWarmupWindowKind | null {
   if (!usage || usage.error) return null;
-  if (hasPrimaryWindow(usage)) return "session";
+  if (hasPrimaryWindow(usage)) {
+    return isMonthlyWindow(usage.primary_window_minutes) ? "monthly" : "session";
+  }
   if (hasSecondaryWindow(usage)) return "weekly";
   return null;
 }
@@ -55,7 +58,7 @@ export function getAutoWarmupWindow(
   const kind = getAutoWarmupWindowKind(usage);
   if (!usage || !kind) return null;
 
-  if (kind === "session") {
+  if (kind === "session" || kind === "monthly") {
     if (!isPresent(usage.primary_resets_at)) return null;
     return {
       kind,
@@ -98,7 +101,7 @@ export function getDueAutoWarmupWindow(
 
   const weeklyUsedPercent = usage?.secondary_used_percent;
   if (
-    window.kind === "session" &&
+    window.kind !== "weekly" &&
     isPresent(weeklyUsedPercent) &&
     weeklyUsedPercent >= LIMIT_FULL_THRESHOLD
   ) {

@@ -21,6 +21,7 @@ import {
   isTauriRuntime,
   invokeBackend,
 } from "./lib/platform";
+import { getEffectivePlanType } from "./lib/accountPlan";
 import {
   applyTheme,
   readStoredTheme,
@@ -155,7 +156,9 @@ function readStoredAutoWarmupLedger(): AutoWarmupLedger {
       }
       if (
         "lastAutoWindowKind" in value &&
-        (value.lastAutoWindowKind === "session" || value.lastAutoWindowKind === "weekly")
+        (value.lastAutoWindowKind === "session" ||
+          value.lastAutoWindowKind === "monthly" ||
+          value.lastAutoWindowKind === "weekly")
       ) {
         entry.lastAutoWindowKind = value.lastAutoWindowKind;
       }
@@ -1440,10 +1443,14 @@ function App() {
       if (!usage || usage.error) return t("warmup.autoOn");
 
       const windowKind = getAutoWarmupWindowKind(usage);
-      if (windowKind === "session" && isLimitFull(usage.secondary_used_percent)) {
+      if (
+        (windowKind === "session" || windowKind === "monthly") &&
+        isLimitFull(usage.secondary_used_percent)
+      ) {
         return t("warmup.waitingWeekly");
       }
       if (windowKind === "session") return t("warmup.autoSession");
+      if (windowKind === "monthly") return t("warmup.autoMonthly");
       if (windowKind === "weekly") return t("warmup.autoWeekly");
 
       return t("warmup.autoOn");
@@ -1516,9 +1523,11 @@ function App() {
           t("warmup.autoSentForWindow", {
             name: accountName,
             window:
-              window.kind === "session"
-                ? t("warmup.windowSession")
-                : t("warmup.windowWeekly"),
+              window.kind === "monthly"
+                ? t("warmup.windowMonthly")
+                : window.kind === "session"
+                  ? t("warmup.windowSession")
+                  : t("warmup.windowWeekly"),
           })
         );
       } catch (err) {
@@ -1973,7 +1982,7 @@ function App() {
 
     const matchesSearch =
       query.length === 0 ||
-      [account.name, account.email, account.plan_type]
+      [account.name, account.email, getEffectivePlanType(account)]
         .filter((value): value is string => Boolean(value))
         .some((value) => value.toLocaleLowerCase().includes(query));
     if (!matchesSearch) return false;

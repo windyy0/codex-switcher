@@ -7,6 +7,7 @@ import type {
   AccountWithUsage,
   WarmupFailureInfo,
 } from "../types";
+import { getEffectivePlanType } from "../lib/accountPlan";
 import { invokeBackend } from "../lib/platform";
 import { AccountUsageStats } from "./AccountUsageStats";
 import { UsageBar } from "./UsageBar";
@@ -66,13 +67,14 @@ function getSubscriptionStatus(timestamp: string | null | undefined, t: TFunctio
       className: "text-gray-400 dark:text-gray-500",
     };
   }
+  const remainingMs = expiryDate.getTime() - Date.now();
   const formattedDate = new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     year: "numeric",
+    ...(remainingMs <= 3 * 24 * 60 * 60 * 1000 ? { hour: "2-digit", minute: "2-digit" } : {}),
   }).format(expiryDate);
 
-  const remainingMs = expiryDate.getTime() - Date.now();
   if (remainingMs <= 0) {
     return {
       label: t("accountCard.expired", { date: formattedDate }),
@@ -118,10 +120,12 @@ function formatResetCreditsExpiry(
   const expiry = new Date(resetCredits.next_expires_at);
   if (Number.isNaN(expiry.getTime())) return null;
 
+  const remainingMs = expiry.getTime() - Date.now();
   const formattedDate = new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     ...(compact ? {} : { year: "numeric" }),
+    ...(remainingMs <= 3 * 24 * 60 * 60 * 1000 ? { hour: "2-digit", minute: "2-digit" } : {}),
   }).format(expiry);
 
   return compact
@@ -271,8 +275,9 @@ export function AccountCard({
     setIsEditing(true);
   };
 
-  const planDisplay = account.plan_type
-    ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
+  const effectivePlanType = getEffectivePlanType(account);
+  const planDisplay = effectivePlanType
+    ? effectivePlanType.charAt(0).toUpperCase() + effectivePlanType.slice(1)
     : account.auth_mode === "api_key"
       ? t("accountCard.apiKey")
       : t("common.unknown");
@@ -287,7 +292,7 @@ export function AccountCard({
   };
 
   const isApiKeyAccount = account.auth_mode === "api_key";
-  const planKey = account.plan_type?.toLowerCase() || (isApiKeyAccount ? "api_key" : "free");
+  const planKey = effectivePlanType?.toLowerCase() || (isApiKeyAccount ? "api_key" : "free");
   const planColorClass = planColors[planKey] || planColors.free;
   const supportsWarmup = !isApiKeyAccount && !account.disabled;
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at, t, locale);

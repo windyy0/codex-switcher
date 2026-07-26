@@ -6,6 +6,17 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Improved
+
+- Free account quotas now use the 30-day window returned by the API and display as “Monthly Limit”; Plus accounts continue to display “Weekly Limit”.
+- Unified quota-period labels across the main page, floating widget, Windows taskbar, and tray; Free accounts no longer show a misleading weekly quota when none is returned.
+- Expiry and reset-credit timestamps now show minute precision when they are in the red warning state, while other states retain the existing date-only display.
+- Updated the GitHub Actions checkout, setup-node, and pnpm versions, and migrated the Node version used by workflow project scripts and builds to Node 24.
+
+### Fixed
+
+- Fixed expired subscriptions continuing to display Plus and leaving stale quota values in the Windows taskbar.
+
 ## [0.106.2] - 2026-07-26
 
 ### Fixed

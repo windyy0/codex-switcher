@@ -29,6 +29,7 @@ use crate::{
 const CLASS_NAME: PCWSTR = w!("CodexSwitcherTaskbarWidget");
 const POSITION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const COUNTDOWN_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const MONTHLY_WINDOW_MINUTES_THRESHOLD: i64 = 28 * 24 * 60;
 static HWND_WIDGET: AtomicIsize = AtomicIsize::new(0);
 static TASKBAR_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static LAST_DARK_MODE: AtomicU32 = AtomicU32::new(0);
@@ -43,6 +44,7 @@ struct WidgetModel {
     secondary: Option<f64>,
     has_primary_window: bool,
     has_secondary_window: bool,
+    primary_window_minutes: Option<i64>,
     primary_resets_at: Option<i64>,
     secondary_resets_at: Option<i64>,
     account: String,
@@ -86,12 +88,7 @@ fn refresh_model(usage: Option<&UsageInfo>) {
         .and_then(|id| store.accounts.iter().find(|account| account.id == id));
     if let Ok(mut model) = MODEL.lock() {
         if model.account_id.as_deref() != active_id {
-            model.primary = None;
-            model.secondary = None;
-            model.has_primary_window = false;
-            model.has_secondary_window = false;
-            model.primary_resets_at = None;
-            model.secondary_resets_at = None;
+            clear_usage(&mut model);
         }
         model.account_id = active_id.map(str::to_owned);
         model.enabled = settings.taskbar.enabled;
@@ -105,19 +102,43 @@ fn refresh_model(usage: Option<&UsageInfo>) {
         model.account = account
             .map(|item| item.name.clone())
             .unwrap_or_else(|| "--".into());
-        if let Some(usage) = usage.filter(|item| Some(item.account_id.as_str()) == active_id && item.error.is_none()) {
-            model.primary = remaining(usage.primary_used_percent);
-            model.secondary = remaining(usage.secondary_used_percent);
-            model.has_primary_window = usage.primary_used_percent.is_some()
-                || usage.primary_window_minutes.is_some()
-                || usage.primary_resets_at.is_some();
-            model.has_secondary_window = usage.secondary_used_percent.is_some()
-                || usage.secondary_window_minutes.is_some()
-                || usage.secondary_resets_at.is_some();
-            model.primary_resets_at = usage.primary_resets_at;
-            model.secondary_resets_at = usage.secondary_resets_at;
+        if let Some(usage) = usage {
+            apply_active_usage(&mut model, usage, active_id);
         }
     }
+}
+
+fn clear_usage(model: &mut WidgetModel) {
+    model.primary = None;
+    model.secondary = None;
+    model.has_primary_window = false;
+    model.has_secondary_window = false;
+    model.primary_window_minutes = None;
+    model.primary_resets_at = None;
+    model.secondary_resets_at = None;
+}
+
+fn apply_active_usage(model: &mut WidgetModel, usage: &UsageInfo, active_id: Option<&str>) {
+    if Some(usage.account_id.as_str()) != active_id {
+        return;
+    }
+
+    clear_usage(model);
+    if usage.error.is_some() {
+        return;
+    }
+
+    model.primary = remaining(usage.primary_used_percent);
+    model.secondary = remaining(usage.secondary_used_percent);
+    model.has_primary_window = usage.primary_used_percent.is_some()
+        || usage.primary_window_minutes.is_some()
+        || usage.primary_resets_at.is_some();
+    model.has_secondary_window = usage.secondary_used_percent.is_some()
+        || usage.secondary_window_minutes.is_some()
+        || usage.secondary_resets_at.is_some();
+    model.primary_window_minutes = usage.primary_window_minutes;
+    model.primary_resets_at = usage.primary_resets_at;
+    model.secondary_resets_at = usage.secondary_resets_at;
 }
 
 fn remaining(used: Option<f64>) -> Option<f64> {
@@ -448,6 +469,7 @@ fn formatted_detailed_cells() -> [String; 4] {
         if weekly_only { model.secondary_resets_at } else { model.primary_resets_at },
         model.chinese,
     );
+    let primary_label = primary_window_label(model.primary_window_minutes, model.chinese);
     if weekly_only {
         return if model.chinese {
             [
@@ -468,16 +490,24 @@ fn formatted_detailed_cells() -> [String; 4] {
 
     if model.chinese {
         [
-            format!("5H: {primary}"),
+            format!("{primary_label}: {primary}"),
             format!("重置: {reset}"),
-            format!("周: {secondary}"),
+            if model.has_secondary_window {
+                format!("周: {secondary}")
+            } else {
+                String::new()
+            },
             format!("账号: {}", model.account),
         ]
     } else {
         [
-            format!("5H: {primary}"),
+            format!("{primary_label}: {primary}"),
             format!("Reset: {reset}"),
-            format!("Week: {secondary}"),
+            if model.has_secondary_window {
+                format!("Week: {secondary}")
+            } else {
+                String::new()
+            },
             model.account.clone(),
         ]
     }
@@ -492,6 +522,7 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
         if weekly_only { model.secondary_resets_at } else { model.primary_resets_at },
         model.chinese,
     );
+    let primary_label = primary_window_label(model.primary_window_minutes, model.chinese);
 
     if weekly_only {
         return match model.layout {
@@ -505,12 +536,66 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
     }
 
     match model.layout {
-        TaskbarLayout::Detailed if model.chinese => (model.layout, format!("5H：{p}  重置：{reset}"), format!("周：{s}  账号：{}", model.account), false),
-        TaskbarLayout::Detailed => (model.layout, format!("5H: {p}  Reset: {reset}"), format!("Week: {s}  {}", model.account), false),
-        TaskbarLayout::Minimal if model.chinese => (model.layout, format!("5H：{p} · {reset}"), format!("周：{s}"), false),
-        TaskbarLayout::Minimal => (model.layout, format!("5H: {p} · {reset}"), format!("Week: {s}"), false),
-        TaskbarLayout::Compact if model.chinese => (model.layout, format!("5H {p} · 周 {s} · {reset}"), String::new(), false),
-        TaskbarLayout::Compact => (model.layout, format!("5H {p} · W {s} · {reset}"), String::new(), false),
+        TaskbarLayout::Detailed if model.chinese => (
+            model.layout,
+            format!("{primary_label}：{p}  重置：{reset}"),
+            if model.has_secondary_window {
+                format!("周：{s}  账号：{}", model.account)
+            } else {
+                format!("账号：{}", model.account)
+            },
+            false,
+        ),
+        TaskbarLayout::Detailed => (
+            model.layout,
+            format!("{primary_label}: {p}  Reset: {reset}"),
+            if model.has_secondary_window {
+                format!("Week: {s}  {}", model.account)
+            } else {
+                model.account.clone()
+            },
+            false,
+        ),
+        TaskbarLayout::Minimal if model.chinese => (
+            model.layout,
+            format!("{primary_label}：{p} · {reset}"),
+            if model.has_secondary_window { format!("周：{s}") } else { String::new() },
+            false,
+        ),
+        TaskbarLayout::Minimal => (
+            model.layout,
+            format!("{primary_label}: {p} · {reset}"),
+            if model.has_secondary_window { format!("Week: {s}") } else { String::new() },
+            false,
+        ),
+        TaskbarLayout::Compact if model.chinese => (
+            model.layout,
+            if model.has_secondary_window {
+                format!("{primary_label} {p} · 周 {s} · {reset}")
+            } else {
+                format!("{primary_label} {p} · {reset}")
+            },
+            String::new(),
+            false,
+        ),
+        TaskbarLayout::Compact => (
+            model.layout,
+            if model.has_secondary_window {
+                format!("{primary_label} {p} · W {s} · {reset}")
+            } else {
+                format!("{primary_label} {p} · {reset}")
+            },
+            String::new(),
+            false,
+        ),
+    }
+}
+
+fn primary_window_label(window_minutes: Option<i64>, chinese: bool) -> &'static str {
+    if window_minutes.is_some_and(|minutes| minutes >= MONTHLY_WINDOW_MINUTES_THRESHOLD) {
+        if chinese { "每月" } else { "Month" }
+    } else {
+        "5H"
     }
 }
 
@@ -568,6 +653,31 @@ mod tests {
     }
 
     #[test]
+    fn active_usage_error_clears_stale_quota() {
+        let mut model = WidgetModel {
+            account_id: Some("account-1".into()),
+            primary: Some(64.0),
+            secondary: Some(38.0),
+            has_primary_window: true,
+            has_secondary_window: true,
+            primary_resets_at: Some(1_800_000_000),
+            secondary_resets_at: Some(1_800_100_000),
+            ..WidgetModel::default()
+        };
+        let usage = UsageInfo::error("account-1".into(), "subscription expired".into());
+
+        apply_active_usage(&mut model, &usage, Some("account-1"));
+
+        assert_eq!(model.primary, None);
+        assert_eq!(model.secondary, None);
+        assert!(!model.has_primary_window);
+        assert!(!model.has_secondary_window);
+        assert_eq!(model.primary_resets_at, None);
+        assert_eq!(model.secondary_resets_at, None);
+        assert_eq!(model.primary_window_minutes, None);
+    }
+
+    #[test]
     fn weekly_only_usage_hides_session_and_shows_weekly_reset() {
         {
             let mut model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
@@ -588,6 +698,28 @@ mod tests {
         let cells = formatted_detailed_cells();
         assert_eq!(cells, ["Week: 65%", "Reset: 3d", "", "work"]);
         assert!(cells.iter().all(|cell| !cell.contains("5H")));
+    }
+
+    #[test]
+    fn monthly_primary_window_is_labeled_as_monthly() {
+        {
+            let mut model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
+            model.layout = TaskbarLayout::Detailed;
+            model.chinese = true;
+            model.primary = Some(92.0);
+            model.secondary = None;
+            model.has_primary_window = true;
+            model.has_secondary_window = false;
+            model.primary_window_minutes = Some(30 * 24 * 60);
+            model.primary_resets_at = Some(chrono::Utc::now().timestamp() + 2 * 24 * 60 * 60);
+            model.secondary_resets_at = None;
+            model.account = "free".into();
+        }
+
+        let (_, first, _, weekly_only) = formatted_lines();
+        assert!(!weekly_only);
+        assert!(first.starts_with("每月："));
+        assert!(!first.contains("5H"));
     }
 
     #[test]
