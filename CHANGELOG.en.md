@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.106.3] - 2026-07-26
+
 ### Improved
 
 - Free account quotas now use the 30-day window returned by the API and display as “Monthly Limit”; Plus accounts continue to display “Weekly Limit”.
