@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.106.4] - 2026-07-26
+
 ### Fixed
 
 - Fixed Windows in-app updates falling back to MSI and recreating a deleted desktop shortcut; updates now consistently use the NSIS installer.
