@@ -6,6 +6,18 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Added
+
+- Reset-credit badges can now expand to show each available credit, its name, and its expiry time in local time, sorted by the nearest expiry.
+
+### Improved
+
+- Improved Windows taskbar account-name rendering while keeping the “Account:” prefix; long names now use smart middle ellipsis, show the full name on hover, and reserve safe spacing to prevent overlap.
+
+### Fixed
+
+- ChatGPT usage, account-check, and warm-up requests now use browser-like request headers to reduce Cloudflare 403 blocks.
+
 ## [0.106.4] - 2026-07-26
 
 ### Fixed

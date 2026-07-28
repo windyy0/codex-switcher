@@ -162,7 +162,10 @@
   "accountCard": {
     "never": "从未", "justNow": "刚刚", "secondsAgo": "{{count}} 秒前", "minutesAgo": "{{count}} 分钟前", "hoursAgo": "{{count}} 小时前",
     "expiryUnavailable": "暂无到期信息", "expired": "已于 {{date}} 到期", "until": "有效期至 {{date}}", "resetCount": "{{count}} 次重置",
-    "resetCount_other": "{{count}} 次重置", "closest": "最近 {{date}}", "closestExpires": "最近一批于 {{date}} 到期", "apiKey": "API 密钥",
+    "resetCount_other": "{{count}} 次重置", "closest": "最近 {{date}}", "closestExpires": "最近一批于 {{date}} 到期",
+    "resetDetails": "查看重置额度到期详情", "availableResets": "可用重置额度", "resetNoExpiry": "无到期时间",
+    "resetExpiryUnavailable": "暂无到期信息", "resetExpires": "到期时间：{{date}}", "resetItem": "重置额度 {{count}}",
+    "resetTimesLocal": "时间按本地时区显示", "apiKey": "API 密钥",
     "rename": "点击重命名", "disabled": "已停用", "disable": "停用", "enable": "启用", "disableAccount": "停用账户", "enableAccount": "重新启用账户", "enableBeforeSwitch": "请先启用此账户再切换", "disabledDescription": "此账户已停用，自动请求和预热均已暂停，但保存的数据仍会保留。", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "apiUsageManagedExternally": "API Key 账户不提供统一的用量和订阅信息，请前往对应服务商后台查看。", "active": "当前使用",
     "closeProcesses": "请先关闭所有 Codex 进程", "switching": "切换中...", "codexRunning": "Codex 正在运行", "switch": "切换",
     "warmupSending": "正在发送预热请求...", "warmupSend": "发送最小预热请求", "autoAll": "已为所有账户开启自动预热",

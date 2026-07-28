@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt};
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT},
+    header::{
+        HeaderMap, HeaderName, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, ORIGIN,
+        REFERER, USER_AGENT,
+    },
     StatusCode,
 };
 use serde::Deserialize;
@@ -21,9 +24,13 @@ const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
 const CHATGPT_ACCOUNTS_CHECK_API: &str =
     "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
 const CHATGPT_CODEX_RESPONSES_API: &str = "https://chatgpt.com/backend-api/codex/responses";
+const CHATGPT_ORIGIN: &str = "https://chatgpt.com";
+/// A browser-like User-Agent to avoid Cloudflare bot detection.
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+    AppleWebKit/537.36 (KHTML, like Gecko) \
+    Chrome/136.0.0.0 Safari/537.36";
 const SESSION_WINDOW_SECONDS: i32 = 5 * 60 * 60;
 const WEEKLY_WINDOW_SECONDS: i32 = 7 * 24 * 60 * 60;
-const CODEX_USER_AGENT: &str = "codex-cli/1.0.0";
 
 #[derive(Debug, Clone)]
 pub struct ChatGptAccountMetadata {
@@ -116,6 +123,13 @@ pub async fn fetch_chatgpt_account_metadata(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
+        if status == StatusCode::FORBIDDEN {
+            anyhow::bail!(
+                "Accounts check API returned 403 Forbidden. \
+                 The request was likely blocked by Cloudflare bot detection. \
+                 This is a transient network issue — please try again in a moment."
+            );
+        }
         anyhow::bail!("Accounts check API error: {status} - {body}");
     }
 
@@ -274,11 +288,30 @@ fn build_chatgpt_headers(
     chatgpt_account_id: Option<&str>,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(CODEX_USER_AGENT));
+    // The previous codex-cli/1.0.0 value is reliably flagged by Cloudflare.
+    headers.insert(USER_AGENT, HeaderValue::from_static(BROWSER_USER_AGENT));
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid access token")?,
     );
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/json, text/plain, */*"),
+    );
+    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+    headers.insert(ORIGIN, HeaderValue::from_static(CHATGPT_ORIGIN));
+    headers.insert(REFERER, HeaderValue::from_static(CHATGPT_ORIGIN));
+
+    // Fetch metadata headers sent by the browser.
+    for (name, value) in [
+        ("sec-fetch-dest", "empty"),
+        ("sec-fetch-mode", "cors"),
+        ("sec-fetch-site", "same-origin"),
+    ] {
+        if let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) {
+            headers.insert(header_name, HeaderValue::from_static(value));
+        }
+    }
 
     if let Some(acc_id) = chatgpt_account_id {
         println!("[Usage] Using ChatGPT Account ID: {acc_id}");
@@ -645,6 +678,48 @@ mod tests {
 
         assert_eq!(primary.map(|window| window.used_percent), Some(11.0));
         assert_eq!(secondary.map(|window| window.used_percent), Some(22.0));
+    }
+
+    #[test]
+    fn uses_browser_like_headers_for_chatgpt_requests() {
+        let headers = build_chatgpt_headers("access-token", Some("account-id")).unwrap();
+
+        assert_eq!(
+            headers
+                .get(USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(BROWSER_USER_AGENT)
+        );
+        assert_eq!(
+            headers.get(ACCEPT).and_then(|value| value.to_str().ok()),
+            Some("application/json, text/plain, */*")
+        );
+        assert_eq!(
+            headers
+                .get(ACCEPT_LANGUAGE)
+                .and_then(|value| value.to_str().ok()),
+            Some("en-US,en;q=0.9")
+        );
+        assert_eq!(
+            headers.get(ORIGIN).and_then(|value| value.to_str().ok()),
+            Some(CHATGPT_ORIGIN)
+        );
+        assert_eq!(
+            headers.get(REFERER).and_then(|value| value.to_str().ok()),
+            Some(CHATGPT_ORIGIN)
+        );
+        assert_eq!(
+            headers
+                .get("sec-fetch-mode")
+                .and_then(|value| value.to_str().ok()),
+            Some("cors")
+        );
+        assert_eq!(
+            headers
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("account-id")
+        );
     }
 
     #[tokio::test]
