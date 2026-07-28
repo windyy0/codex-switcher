@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.106.5] - 2026-07-29
+
 ### Added
 
 - Reset-credit badges can now expand to show each available credit, its name, and its expiry time in local time, sorted by the nearest expiry.
