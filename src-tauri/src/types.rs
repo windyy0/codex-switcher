@@ -117,6 +117,9 @@ pub enum TaskbarDoubleClickAction {
     OpenMain,
 }
 
+pub const TASKBAR_MIN_WIDTH: i32 = 224;
+pub const TASKBAR_MAX_WIDTH: i32 = 336;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TaskbarSettings {
@@ -124,6 +127,7 @@ pub struct TaskbarSettings {
     pub layout: TaskbarLayout,
     pub double_click_action: TaskbarDoubleClickAction,
     pub last_error: Option<String>,
+    pub width: i32,
     pub offset_x: i32,
     pub offset_y: i32,
 }
@@ -135,6 +139,7 @@ impl Default for TaskbarSettings {
             layout: TaskbarLayout::Detailed,
             double_click_action: TaskbarDoubleClickAction::ToggleFloating,
             last_error: None,
+            width: TASKBAR_MIN_WIDTH,
             offset_x: 0,
             offset_y: 0,
         }
@@ -662,7 +667,7 @@ pub struct CreditStatusDetails {
 mod tests {
     use super::{
         parse_chatgpt_id_token_claims, AccountInfo, AppLanguage, AppSettings, DockDisplayMode,
-        FloatingSettings, StoredAccount, TrayDisplayMode,
+        FloatingSettings, StoredAccount, TrayDisplayMode, TASKBAR_MIN_WIDTH,
     };
     use base64::Engine;
     use chrono::{Duration, Utc};
@@ -744,6 +749,7 @@ mod tests {
         assert!(settings.close_behavior_prompt_enabled);
         assert!(!settings.show_dual_clock);
         assert!(settings.taskbar.enabled);
+        assert_eq!(settings.taskbar.width, TASKBAR_MIN_WIDTH);
         assert_eq!(settings.taskbar.offset_x, 0);
         assert_eq!(settings.taskbar.offset_y, 0);
         assert!(settings.floating.enabled);

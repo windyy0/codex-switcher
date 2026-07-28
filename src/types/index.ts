@@ -17,6 +17,7 @@ export interface AppSettings {
     layout: TaskbarLayout;
     double_click_action: TaskbarDoubleClickAction;
     last_error: string | null;
+    width: number;
     offset_x: number;
     offset_y: number;
   };

@@ -44,6 +44,10 @@ pub fn set_app_settings(app: AppHandle, mut settings: AppSettings) -> Result<App
         }
     }
     settings.floating.opacity = settings.floating.opacity.clamp(0.25, 1.0);
+    settings.taskbar.width = settings.taskbar.width.clamp(
+        crate::types::TASKBAR_MIN_WIDTH,
+        crate::types::TASKBAR_MAX_WIDTH,
+    );
     if settings.floating.visible_fields.is_empty() {
         settings.floating.visible_fields = crate::types::FloatingSettings::default().visible_fields;
     }
