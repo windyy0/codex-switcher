@@ -6,6 +6,23 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Added
+
+- Added account health diagnostics that distinguish expired authorization, account deactivation, workspace deactivation, request limits, and transient failures from explicit usage, account-check, token-refresh, and login responses, while retaining sanitized error codes, provider messages, timestamps, and recent diagnostic history.
+- ChatGPT accounts with expired authorization can now be reauthorized in place; successful authorization updates the existing credentials after identity verification, without creating a duplicate account or changing the active account when the target is inactive.
+- When the authorization page does not return to Codex Switcher, users can confirm the common deleted-or-deactivated message with one click or paste the full page error for strict recognition; reporting immediately stops the wait and records that the signal was confirmed from the authorization page.
+
+### Improved
+
+- Added direct “Reauthorize,” “Recheck status,” and “View diagnostics” entry points to account rows, and aligned expired-authorization and manually disabled statuses in the same list column.
+- Accounts with expired authorization or an explicit deactivation signal are excluded from automatic switching, bulk usage polling, and automatic warm-up; manual status checks can still use the existing credentials to detect recovery.
+- Account deletion now uses a confirmation dialog and clearly reports success, failure, and the failure reason.
+
+### Fixed
+
+- Fixed ChatGPT sign-in being unable to update an existing Codex Switcher account after its credentials expired, while importing the same account again only reported that it already existed.
+- Fixed Codex Switcher having no way to stop waiting or record the real deactivation signal when OpenAI keeps `account_deactivated` and similar authentication errors on a provider page without an OAuth callback.
+
 ## [0.106.5] - 2026-07-29
 
 ### Added

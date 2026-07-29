@@ -17,8 +17,8 @@ use crate::commands::{
     get_active_account_info, get_api_account_config, get_app_language, get_masked_account_ids,
     import_accounts_full_encrypted_bytes, import_accounts_slim_text, kill_codex_processes,
     list_accounts, refresh_account_metadata, refresh_all_accounts_usage, rename_account,
-    set_account_disabled, set_api_account_config, set_masked_account_ids, start_login,
-    switch_account, warmup_account, warmup_all_accounts,
+    report_oauth_page_error, set_account_disabled, set_api_account_config, set_masked_account_ids,
+    start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 use crate::types::AppLanguage;
 
@@ -71,6 +71,17 @@ struct ApiAccountConfigArgs {
 struct LoginArgs {
     #[serde(alias = "account_name")]
     account_name: String,
+    #[serde(default, alias = "target_account_id")]
+    target_account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthPageErrorArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    #[serde(alias = "error_text")]
+    error_text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,10 +275,14 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         }
         "start_login" => {
             let args: LoginArgs = parse_args(payload)?;
-            to_json(start_login(args.account_name).await?)
+            to_json(start_login(args.account_name, args.target_account_id).await?)
         }
         "complete_login" => to_json(complete_login().await?),
         "cancel_login" => to_json(cancel_login().await?),
+        "report_oauth_page_error" => {
+            let args: OAuthPageErrorArgs = parse_args(payload)?;
+            to_json(report_oauth_page_error(args.account_id, args.error_text).await?)
+        }
         "export_accounts_slim_text" => to_json(export_accounts_slim_text().await?),
         "import_accounts_slim_text" => {
             let args: ImportSlimArgs = parse_args(payload)?;

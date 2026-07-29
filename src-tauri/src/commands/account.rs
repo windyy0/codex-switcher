@@ -306,6 +306,9 @@ pub(crate) fn switch_account_by_id_unlocked(account_id: &str) -> Result<(), Stri
     if account.disabled {
         return Err("Account is disabled".to_string());
     }
+    if account.health_blocks_account_actions() {
+        return Err("Account authentication or availability requires attention".to_string());
+    }
     ensure_codex_not_running()?;
     let transition_snapshot = snapshot_codex_state().map_err(|e| e.to_string())?;
 
@@ -373,7 +376,11 @@ pub async fn delete_account(account_id: String) -> Result<(), String> {
     let replacement = store
         .accounts
         .iter()
-        .find(|account| account.id != account_id && !account.disabled)
+        .find(|account| {
+            account.id != account_id
+                && !account.disabled
+                && !account.health_blocks_account_actions()
+        })
         .cloned();
     match &replacement {
         Some(account) => {

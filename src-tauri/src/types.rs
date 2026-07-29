@@ -321,6 +321,13 @@ pub struct StoredAccount {
     pub created_at: DateTime<Utc>,
     /// Last time this account was used
     pub last_used_at: Option<DateTime<Utc>>,
+    /// Latest sanitized result from an authenticated account check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<AccountHealthDiagnostic>,
+    /// Recent health-state transitions. Credentials and response headers are
+    /// never stored here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub health_history: Vec<AccountHealthDiagnostic>,
 }
 
 impl StoredAccount {
@@ -338,6 +345,8 @@ impl StoredAccount {
             codex_config: None,
             created_at: Utc::now(),
             last_used_at: None,
+            health: None,
+            health_history: Vec::new(),
         }
     }
 
@@ -369,7 +378,70 @@ impl StoredAccount {
             codex_config: None,
             created_at: Utc::now(),
             last_used_at: None,
+            health: None,
+            health_history: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountHealthStatus {
+    Healthy,
+    ReauthRequired,
+    AccountDeactivated,
+    WorkspaceDeactivated,
+    Limited,
+    TransientError,
+    Unknown,
+}
+
+impl AccountHealthStatus {
+    pub fn blocks_account_actions(self) -> bool {
+        matches!(
+            self,
+            Self::ReauthRequired | Self::AccountDeactivated | Self::WorkspaceDeactivated
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountHealthSource {
+    Usage,
+    AccountsCheck,
+    TokenRefresh,
+    #[serde(rename = "oauth")]
+    OAuth,
+    OAuthUserReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountHealthObservation {
+    pub status: AccountHealthStatus,
+    pub source: AccountHealthSource,
+    pub http_status: Option<u16>,
+    pub error_code: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountHealthDiagnostic {
+    pub status: AccountHealthStatus,
+    pub source: AccountHealthSource,
+    pub http_status: Option<u16>,
+    pub error_code: Option<String>,
+    pub message: Option<String>,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub occurrence_count: u32,
+}
+
+impl StoredAccount {
+    pub fn health_blocks_account_actions(&self) -> bool {
+        self.health
+            .as_ref()
+            .is_some_and(|health| health.status.blocks_account_actions())
     }
 }
 
@@ -499,6 +571,8 @@ pub struct AccountInfo {
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub has_codex_config: bool,
+    pub health: Option<AccountHealthDiagnostic>,
+    pub health_history: Vec<AccountHealthDiagnostic>,
 }
 
 impl AccountInfo {
@@ -535,6 +609,8 @@ impl AccountInfo {
             created_at: account.created_at,
             last_used_at: account.last_used_at,
             has_codex_config: account.codex_config.is_some(),
+            health: account.health.clone(),
+            health_history: account.health_history.clone(),
         }
     }
 }
@@ -566,6 +642,11 @@ pub struct UsageInfo {
     pub credits_balance: Option<String>,
     /// Error message if usage fetch failed
     pub error: Option<String>,
+    /// Internal observation persisted by the command layer. It is intentionally
+    /// omitted from frontend payloads because AccountInfo is the canonical
+    /// health-status view.
+    #[serde(skip)]
+    pub health_observation: Option<AccountHealthObservation>,
 }
 
 impl UsageInfo {
@@ -583,6 +664,7 @@ impl UsageInfo {
             unlimited_credits: None,
             credits_balance: None,
             error: Some(error),
+            health_observation: None,
         }
     }
 }

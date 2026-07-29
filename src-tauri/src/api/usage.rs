@@ -14,10 +14,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+use crate::account_health::{classify_http_error, healthy_observation};
 use crate::auth::{ensure_chatgpt_tokens_fresh, refresh_chatgpt_tokens};
 use crate::types::{
-    AuthData, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload, RateLimitWindow,
-    StoredAccount, UsageInfo,
+    AccountHealthSource, AuthData, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload,
+    RateLimitWindow, StoredAccount, UsageInfo,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -87,6 +88,7 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 unlimited_credits: None,
                 credits_balance: None,
                 error: Some("Usage info not available for API key accounts".to_string()),
+                health_observation: None,
             })
         }
         AuthData::ChatGPT { .. } => get_usage_with_chatgpt_auth(account).await,
@@ -191,10 +193,15 @@ async fn parse_usage_response(
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         println!("[Usage] Error response: {body}");
-        return Ok(UsageInfo::error(
-            account_id.to_string(),
-            format!("API error: {status}"),
-        ));
+        let observation = classify_http_error(AccountHealthSource::Usage, status.as_u16(), &body);
+        let display_error = observation
+            .message
+            .clone()
+            .or_else(|| observation.error_code.clone())
+            .unwrap_or_else(|| format!("API error: {status}"));
+        let mut usage = UsageInfo::error(account_id.to_string(), display_error);
+        usage.health_observation = Some(observation);
+        return Ok(usage);
     }
 
     let body_text = response
@@ -211,7 +218,8 @@ async fn parse_usage_response(
 
     println!("[Usage] Parsed plan_type: {}", payload.plan_type);
 
-    let usage = convert_payload_to_usage_info(account_id, payload);
+    let mut usage = convert_payload_to_usage_info(account_id, payload);
+    usage.health_observation = Some(healthy_observation(AccountHealthSource::Usage));
     println!(
         "[Usage] {} - primary: {:?}%, plan: {:?}",
         account_name, usage.primary_used_percent, usage.plan_type
@@ -533,6 +541,7 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
         unlimited_credits: credits.as_ref().map(|c| c.unlimited),
         credits_balance: credits.and_then(|c| c.balance),
         error: None,
+        health_observation: None,
     }
 }
 
@@ -575,7 +584,9 @@ pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
     let eligible_accounts = accounts
         .iter()
         .filter(|account| {
-            !account.disabled && matches!(account.auth_data, AuthData::ChatGPT { .. })
+            !account.disabled
+                && !account.health_blocks_account_actions()
+                && matches!(account.auth_data, AuthData::ChatGPT { .. })
         })
         .cloned()
         .collect::<Vec<_>>();

@@ -3,7 +3,14 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAccounts } from "./hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
-import { AccountCard, AccountRow, AddAccountModal, UpdateChecker, requestUpdateCheck } from "./components";
+import {
+  AccountCard,
+  AccountRow,
+  AddAccountModal,
+  ReauthAccountModal,
+  UpdateChecker,
+  requestUpdateCheck,
+} from "./components";
 import { SelectMenu } from "./components/SelectMenu";
 import { WindowsDisplaySettings } from "./components/WindowsDisplaySettings";
 import { TimeDisplay } from "./components/TimeDisplay";
@@ -22,6 +29,7 @@ import {
   invokeBackend,
 } from "./lib/platform";
 import { getEffectivePlanType } from "./lib/accountPlan";
+import { accountHealthBlocksAccountActions } from "./lib/accountHealth";
 import {
   applyTheme,
   readStoredTheme,
@@ -86,7 +94,14 @@ interface TrayAccountSwitchOutcome {
 interface CloseBehaviorRequestedPayload {
   requestId?: number;
 }
-type AccountStatusFilter = "all" | "available" | "exhausted" | "expiring" | "disabled" | "api";
+type AccountStatusFilter =
+  | "all"
+  | "available"
+  | "exhausted"
+  | "attention"
+  | "expiring"
+  | "disabled"
+  | "api";
 type AccountLayoutMode = "list" | "card";
 type OtherAccountsSort =
   | "recommended"
@@ -206,6 +221,7 @@ function getTimedWarmupTargets(
   return accounts.filter(
     (account) =>
       !account.disabled &&
+      !accountHealthBlocksAccountActions(account) &&
       !failures[account.id]?.modelUnavailable &&
       account.usage &&
       !account.usageLoading &&
@@ -235,12 +251,14 @@ function App() {
     importAccountsSlimText,
     startOAuthLogin,
     completeOAuthLogin,
+    reportOAuthPageError,
     cancelOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   } = useAccounts();
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [reauthAccountId, setReauthAccountId] = useState<string | null>(null);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [apiConfigAccount, setApiConfigAccount] = useState<AccountWithUsage | null>(null);
   const [apiConfigText, setApiConfigText] = useState("");
@@ -258,6 +276,8 @@ function App() {
   const configModalRequestRef = useRef(0);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
   const [processInfo, setProcessInfo] = useState<CodexProcessInfo | null>(null);
   const processInfoRef = useRef<CodexProcessInfo | null>(null);
   const processCheckPromiseRef = useRef<Promise<CodexProcessInfo | null> | null>(null);
@@ -666,18 +686,32 @@ function App() {
     }
   };
 
-  const handleDelete = async (accountId: string) => {
-    if (deleteConfirmId !== accountId) {
-      setDeleteConfirmId(accountId);
-      setTimeout(() => setDeleteConfirmId(null), 3000);
-      return;
-    }
+  const handleDelete = (accountId: string) => {
+    setDeleteAccountError(null);
+    setDeleteConfirmId(accountId);
+  };
 
+  const handleDeleteConfirm = async () => {
+    if (!deleteConfirmId || isDeletingAccount) return;
+
+    const accountId = deleteConfirmId;
+    const accountName =
+      accounts.find((account) => account.id === accountId)?.name ??
+      t("accounts.unknownAccount");
+    setIsDeletingAccount(true);
+    setDeleteAccountError(null);
     try {
       await deleteAccount(accountId);
       setDeleteConfirmId(null);
+      setSelectedAccountId((current) => (current === accountId ? null : current));
+      showWarmupToast(t("accounts.deleteSuccess", { name: accountName }));
     } catch (err) {
       console.error("Failed to delete account:", err);
+      const reason = formatDeleteError(err);
+      setDeleteAccountError(reason);
+      showWarmupToast(t("accounts.deleteFailed", { error: reason }), true);
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -792,6 +826,14 @@ function App() {
       return t("common.unknownError");
     }
   }, [t]);
+
+  const formatDeleteError = useCallback((err: unknown) => {
+    const message = formatWarmupError(err);
+    if (message.startsWith("Cannot switch accounts while ")) {
+      return t("accounts.deleteCodexRunning");
+    }
+    return message;
+  }, [formatWarmupError, t]);
 
   const dismissWarmupFailure = useCallback((accountId: string) => {
     delete autoWarmupRetryAfterRef.current[accountId];
@@ -1366,7 +1408,12 @@ function App() {
       const warmedAt = Date.now();
       const failedAccountIds = new Set(summary.failed_account_ids);
       accounts
-        .filter((account) => account.auth_mode !== "api_key" && !account.disabled)
+        .filter(
+          (account) =>
+            account.auth_mode !== "api_key" &&
+            !account.disabled &&
+            !accountHealthBlocksAccountActions(account)
+        )
         .forEach((account) => {
           if (!failedAccountIds.has(account.id)) {
             markSuccessfulWarmup(account.id, warmedAt);
@@ -1464,6 +1511,7 @@ function App() {
         (account) =>
           account.auth_mode === "chat_g_p_t" &&
           !account.disabled &&
+          !accountHealthBlocksAccountActions(account) &&
           !warmupFailures[account.id]?.modelUnavailable
       );
       return (
@@ -1570,7 +1618,7 @@ function App() {
 
     const checkAutoWarmup = () => {
       for (const account of accountsRef.current) {
-        if (account.disabled) continue;
+        if (account.disabled || accountHealthBlocksAccountActions(account)) continue;
         if (warmupFailuresRef.current[account.id]?.modelUnavailable) continue;
         const autoEnabled =
           autoWarmupAllEnabled || autoWarmupAccountIdsRef.current.has(account.id);
@@ -1847,6 +1895,9 @@ function App() {
   const activeAccount = accounts.find((a) => a.is_active);
   const otherAccounts = accounts.filter((a) => !a.is_active);
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null;
+  const reauthAccount = accounts.find((account) => account.id === reauthAccountId) ?? null;
+  const deleteConfirmAccount =
+    accounts.find((account) => account.id === deleteConfirmId) ?? null;
   const hasRunningProcesses = processInfo && processInfo.count > 0;
   const pendingTraySwitchAccount = useMemo(
     () => accounts.find((account) => account.id === pendingTraySwitchAccountId),
@@ -1887,7 +1938,8 @@ function App() {
     return [...otherAccounts].sort((a, b) => {
       if (otherAccountsSort === "recommended") {
         const getRecommendationBucket = (account: AccountWithUsage) => {
-          if (account.disabled) return 4;
+          if (account.disabled) return 5;
+          if (accountHealthBlocksAccountActions(account)) return 4;
           if (account.auth_mode === "api_key") return 3;
           const used = account.usage?.secondary_used_percent ?? account.usage?.primary_used_percent;
           if (used === null || used === undefined) return 1;
@@ -1997,6 +2049,8 @@ function App() {
         );
       case "exhausted":
         return !account.disabled && account.auth_mode === "chat_g_p_t" && isExhausted(account);
+      case "attention":
+        return Boolean(account.health && account.health.status !== "healthy");
       case "expiring":
         return isExpiringSoon(account.subscription_expires_at);
       case "disabled":
@@ -2150,6 +2204,7 @@ function App() {
           ["all", t("accounts.filterAll")],
           ["available", t("accounts.filterAvailable")],
           ["exhausted", t("accounts.filterExhausted")],
+          ["attention", t("accounts.filterAttention")],
           ["expiring", t("accounts.filterExpiring")],
           ["disabled", t("accounts.filterDisabled")],
           ["api", t("accounts.filterApi")],
@@ -2181,6 +2236,8 @@ function App() {
       onWarmup={() => handleWarmupAccount(account.id, account.name)}
       onDelete={() => handleDelete(account.id)}
       onRefresh={() => refreshSingleUsage(account.id, { refreshMetadata: true })}
+      onReauthorize={() => setReauthAccountId(account.id)}
+      onRevalidate={() => refreshSingleUsage(account.id)}
       onRename={(newName) => renameAccount(account.id, newName)}
       onToggleDisabled={() => setAccountDisabled(account.id, !account.disabled)}
       onEditApiConfig={() => void openApiConfig(account)}
@@ -2324,6 +2381,7 @@ function App() {
                   isRefreshing ||
                   !accounts.some(
                     (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+                      && !accountHealthBlocksAccountActions(account)
                   )
                 }
                 className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -2337,6 +2395,7 @@ function App() {
                   isWarmingAll ||
                   !accounts.some(
                     (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+                      && !accountHealthBlocksAccountActions(account)
                   )
                 }
                 className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -2698,6 +2757,8 @@ function App() {
                         onSwitch={() => { }}
                         onWarmup={() => handleWarmupAccount(activeAccount.id, activeAccount.name)}
                         onRefresh={() => refreshSingleUsage(activeAccount.id, { refreshMetadata: true })}
+                        onReauthorize={() => setReauthAccountId(activeAccount.id)}
+                        onRevalidate={() => refreshSingleUsage(activeAccount.id)}
                         onEnable={() => setAccountDisabled(activeAccount.id, false)}
                         onOpenDetails={() => setSelectedAccountId(activeAccount.id)}
                         switching={switchingId === activeAccount.id}
@@ -2732,6 +2793,8 @@ function App() {
                           onSwitch={() => handleSwitch(account.id)}
                           onWarmup={() => handleWarmupAccount(account.id, account.name)}
                           onRefresh={() => refreshSingleUsage(account.id, { refreshMetadata: true })}
+                          onReauthorize={() => setReauthAccountId(account.id)}
+                          onRevalidate={() => refreshSingleUsage(account.id)}
                           onEnable={() => setAccountDisabled(account.id, false)}
                           onOpenDetails={() => setSelectedAccountId(account.id)}
                           switching={switchingId === account.id}
@@ -2803,6 +2866,8 @@ function App() {
                 onWarmup={() => handleWarmupAccount(selectedAccount.id, selectedAccount.name)}
                 onDelete={() => handleDelete(selectedAccount.id)}
                 onRefresh={() => refreshSingleUsage(selectedAccount.id, { refreshMetadata: true })}
+                onReauthorize={() => setReauthAccountId(selectedAccount.id)}
+                onRevalidate={() => refreshSingleUsage(selectedAccount.id)}
                 onRename={(newName) => renameAccount(selectedAccount.id, newName)}
                 onToggleDisabled={() => setAccountDisabled(selectedAccount.id, !selectedAccount.disabled)}
                 onEditApiConfig={() => void openApiConfig(selectedAccount)}
@@ -2869,10 +2934,71 @@ function App() {
         </div>
       )}
 
-      {/* Delete Confirmation Toast */}
+      {/* Delete Confirmation Dialog */}
       {deleteConfirmId && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-3 bg-red-600 text-white rounded-lg shadow-lg text-sm">
-          {t("accounts.deleteConfirm")}
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-account-title"
+        >
+          <div className="mx-4 w-full max-w-md rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900">
+            <div className="border-b border-gray-100 p-5 dark:border-gray-800">
+              <h2
+                id="delete-account-title"
+                className="text-lg font-semibold text-gray-900 dark:text-gray-100"
+              >
+                {t("accounts.deleteTitle")}
+              </h2>
+            </div>
+            <div className="space-y-3 p-5">
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                {t("accounts.deleteBody", {
+                  name: deleteConfirmAccount?.name ?? t("accounts.unknownAccount"),
+                })}
+              </p>
+              {deleteConfirmAccount?.is_active && (
+                <p className="text-sm text-amber-700 dark:text-amber-300">
+                  {t("accounts.deleteActiveWarning")}
+                </p>
+              )}
+              <p className="text-sm text-red-600 dark:text-red-300">
+                {t("accounts.deleteIrreversible")}
+              </p>
+              {deleteAccountError && (
+                <div
+                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
+                  role="alert"
+                >
+                  {t("accounts.deleteFailed", { error: deleteAccountError })}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 border-t border-gray-100 p-5 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmId(null);
+                  setDeleteAccountError(null);
+                }}
+                disabled={isDeletingAccount}
+                className="rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                autoFocus
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteConfirm()}
+                disabled={isDeletingAccount}
+                className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isDeletingAccount
+                  ? t("accounts.deleting")
+                  : t("accounts.deleteAction")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2985,6 +3111,16 @@ function App() {
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}
         onCancelOAuth={cancelOAuthLogin}
+      />
+
+      <ReauthAccountModal
+        account={reauthAccount}
+        onClose={() => setReauthAccountId(null)}
+        onStart={startOAuthLogin}
+        onComplete={(accountId) => completeOAuthLogin(accountId)}
+        onValidate={(accountId) => refreshSingleUsage(accountId)}
+        onReportPageError={reportOAuthPageError}
+        onCancel={cancelOAuthLogin}
       />
 
       {apiConfigAccount && (

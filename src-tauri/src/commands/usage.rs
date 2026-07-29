@@ -1,12 +1,18 @@
 //! Usage query Tauri commands
 
+use crate::account_health::{classify_error_message, healthy_observation};
 use crate::api::usage::{
-    fetch_chatgpt_account_metadata, get_account_usage, refresh_all_usage,
-    warmup_account as send_warmup,
+    fetch_chatgpt_account_metadata, get_account_usage, warmup_account as send_warmup,
 };
-use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
+use crate::auth::{
+    get_account, load_accounts, record_account_health, refresh_chatgpt_tokens,
+    update_account_metadata,
+};
 use crate::commands::account::lock_account_transition;
-use crate::types::{AccountInfo, AuthData, UsageInfo, WarmupFailure, WarmupSummary};
+use crate::types::{
+    AccountHealthObservation, AccountHealthSource, AccountInfo, AuthData, UsageInfo, WarmupFailure,
+    WarmupSummary,
+};
 use futures::{stream, StreamExt};
 use std::{
     collections::HashMap,
@@ -44,7 +50,34 @@ pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
         return Err("Account is disabled".to_string());
     }
 
-    get_account_usage(&account).await.map_err(|e| e.to_string())
+    match get_account_usage(&account).await {
+        Ok(mut usage) => {
+            let observation = usage
+                .health_observation
+                .take()
+                .unwrap_or_else(|| healthy_observation(AccountHealthSource::Usage));
+            persist_health_observation(account_id, observation);
+            Ok(usage)
+        }
+        Err(error) => {
+            persist_health_observation(
+                account_id,
+                classify_error_message(AccountHealthSource::Usage, &error.to_string()),
+            );
+            Err(error.to_string())
+        }
+    }
+}
+
+fn persist_health_observation(account_id: &str, observation: AccountHealthObservation) {
+    let result = (|| {
+        let _transition_guard = lock_account_transition()?;
+        record_account_health(account_id, observation).map_err(|error| error.to_string())?;
+        Ok::<(), String>(())
+    })();
+    if let Err(error) = result {
+        eprintln!("[Health] Failed to record account {account_id} status: {error}");
+    }
 }
 
 fn usage_cache_ttl(account_id: &str) -> Duration {
@@ -155,42 +188,86 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
     let updated = match &account.auth_data {
         AuthData::ApiKey { .. } => account,
         AuthData::ChatGPT { .. } => {
-            let refreshed = refresh_chatgpt_tokens(&account)
-                .await
-                .map_err(|e| e.to_string())?;
-            let live_metadata = fetch_chatgpt_account_metadata(&refreshed)
-                .await
-                .map_err(|e| e.to_string())?;
+            let refreshed = match refresh_chatgpt_tokens(&account).await {
+                Ok(refreshed) => refreshed,
+                Err(error) => {
+                    persist_health_observation(
+                        &account_id,
+                        classify_error_message(
+                            AccountHealthSource::TokenRefresh,
+                            &error.to_string(),
+                        ),
+                    );
+                    return Err(error.to_string());
+                }
+            };
+            let live_metadata = match fetch_chatgpt_account_metadata(&refreshed).await {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    persist_health_observation(
+                        &account_id,
+                        classify_error_message(
+                            AccountHealthSource::AccountsCheck,
+                            &error.to_string(),
+                        ),
+                    );
+                    return Err(error.to_string());
+                }
+            };
 
             let _transition_guard = lock_account_transition()?;
-            update_account_metadata(
+            let updated = update_account_metadata(
                 &account_id,
                 None,
                 None,
                 live_metadata.plan_type,
                 Some(live_metadata.subscription_expires_at),
             )
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+            record_account_health(
+                &account_id,
+                healthy_observation(AccountHealthSource::AccountsCheck),
+            )
+            .map_err(|error| error.to_string())?;
+            updated
         }
     };
 
     let store = load_accounts().map_err(|e| e.to_string())?;
     let active_id = store.active_account_id.as_deref();
-    Ok(AccountInfo::from_stored(&updated, active_id))
+    let latest = store
+        .accounts
+        .iter()
+        .find(|candidate| candidate.id == updated.id)
+        .unwrap_or(&updated);
+    Ok(AccountInfo::from_stored(latest, active_id))
 }
 
 /// Refresh usage info for all accounts
 #[tauri::command]
 pub async fn refresh_all_accounts_usage() -> Result<Vec<UsageInfo>, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let eligible_accounts = store
+    let eligible_account_ids = store
         .accounts
         .into_iter()
         .filter(|account| {
-            !account.disabled && matches!(account.auth_data, AuthData::ChatGPT { .. })
+            !account.disabled
+                && !account.health_blocks_account_actions()
+                && matches!(account.auth_data, AuthData::ChatGPT { .. })
         })
+        .map(|account| account.id)
         .collect::<Vec<_>>();
-    Ok(refresh_all_usage(&eligible_accounts).await)
+    let concurrency = eligible_account_ids.len().min(10).max(1);
+    Ok(stream::iter(eligible_account_ids)
+        .map(|account_id| async move {
+            match fetch_usage(&account_id).await {
+                Ok(usage) => usage,
+                Err(error) => UsageInfo::error(account_id, error),
+            }
+        })
+        .buffer_unordered(concurrency)
+        .collect()
+        .await)
 }
 
 /// Send a minimal warm-up request for one account
@@ -201,6 +278,9 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
     if account.disabled {
         return Err("Account is disabled".to_string());
+    }
+    if account.health_blocks_account_actions() {
+        return Err("Account authentication or availability requires attention".to_string());
     }
 
     send_warmup(&account).await.map_err(|e| e.to_string())
@@ -214,7 +294,9 @@ pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
         .accounts
         .into_iter()
         .filter(|account| {
-            !account.disabled && matches!(account.auth_data, AuthData::ChatGPT { .. })
+            !account.disabled
+                && !account.health_blocks_account_actions()
+                && matches!(account.auth_data, AuthData::ChatGPT { .. })
         })
         .collect::<Vec<_>>();
     let total_accounts = eligible_accounts.len();

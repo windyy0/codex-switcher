@@ -2,11 +2,14 @@ import { useCallback, useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import type {
+  AccountHealthDiagnostic,
+  AccountHealthStatus,
   AccountResetCredits,
   AccountUsageStats as AccountUsageStatsInfo,
   AccountWithUsage,
   WarmupFailureInfo,
 } from "../types";
+import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
 import { getEffectivePlanType } from "../lib/accountPlan";
 import { invokeBackend } from "../lib/platform";
 import { AccountUsageStats } from "./AccountUsageStats";
@@ -21,6 +24,8 @@ interface AccountCardProps {
   onWarmup: () => Promise<void>;
   onDelete: () => void;
   onRefresh: () => Promise<unknown>;
+  onReauthorize?: () => void;
+  onRevalidate?: () => Promise<unknown>;
   onRename: (newName: string) => Promise<void>;
   onToggleDisabled: () => Promise<void>;
   onEditApiConfig?: () => void;
@@ -114,12 +119,86 @@ function BlurredText({ children, blur }: { children: React.ReactNode; blur: bool
   );
 }
 
+function healthStatusLabel(status: AccountHealthStatus, t: TFunction): string {
+  switch (status) {
+    case "healthy":
+      return t("accountHealth.healthy");
+    case "reauth_required":
+      return t("accountHealth.reauthRequired");
+    case "account_deactivated":
+      return t("accountHealth.accountDeactivated");
+    case "workspace_deactivated":
+      return t("accountHealth.workspaceDeactivated");
+    case "limited":
+      return t("accountHealth.limited");
+    case "transient_error":
+      return t("accountHealth.transientError");
+    default:
+      return t("accountHealth.unknown");
+  }
+}
+
+function healthSourceLabel(
+  diagnostic: AccountHealthDiagnostic,
+  t: TFunction
+): string {
+  switch (diagnostic.source) {
+    case "usage":
+      return t("accountHealth.sourceUsage");
+    case "accounts_check":
+      return t("accountHealth.sourceAccountsCheck");
+    case "token_refresh":
+      return t("accountHealth.sourceTokenRefresh");
+    case "oauth":
+      return t("accountHealth.sourceOAuth");
+    case "oauth_user_report":
+      return t("accountHealth.sourceOAuthUserReport");
+  }
+}
+
+function HealthDiagnosticDetails({
+  diagnostic,
+  locale,
+  t,
+}: {
+  diagnostic: AccountHealthDiagnostic;
+  locale: string;
+  t: TFunction;
+}) {
+  return (
+    <div className="rounded-lg border border-black/5 bg-white/55 px-3 py-2 text-[11px] leading-5 dark:border-white/10 dark:bg-black/10">
+      <div className="font-semibold">{healthStatusLabel(diagnostic.status, t)}</div>
+      <div>{t("accountHealth.source")}: {healthSourceLabel(diagnostic, t)}</div>
+      {diagnostic.http_status !== null && (
+        <div>HTTP: {diagnostic.http_status}</div>
+      )}
+      {diagnostic.error_code && (
+        <div>{t("accountHealth.errorCode")}: {diagnostic.error_code}</div>
+      )}
+      {diagnostic.message && (
+        <div className="break-words">{t("accountHealth.originalMessage")}: {diagnostic.message}</div>
+      )}
+      <div>
+        {t("accountHealth.firstSeen")}:{" "}
+        {new Date(diagnostic.first_seen_at).toLocaleString(locale)}
+      </div>
+      <div>
+        {t("accountHealth.lastSeen")}:{" "}
+        {new Date(diagnostic.last_seen_at).toLocaleString(locale)}
+      </div>
+      <div>{t("accountHealth.occurrences", { count: diagnostic.occurrence_count })}</div>
+    </div>
+  );
+}
+
 export function AccountCard({
   account,
   onSwitch,
   onWarmup,
   onDelete,
   onRefresh,
+  onReauthorize,
+  onRevalidate,
   onRename,
   onToggleDisabled,
   onEditApiConfig,
@@ -140,6 +219,7 @@ export function AccountCard({
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? "en-US";
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRevalidating, setIsRevalidating] = useState(false);
   const [isTogglingDisabled, setIsTogglingDisabled] = useState(false);
   const lastRefresh = account.usageUpdatedAt ? new Date(account.usageUpdatedAt) : null;
   const [isEditing, setIsEditing] = useState(false);
@@ -164,6 +244,18 @@ export function AccountCard({
       console.error("Failed to refresh account usage:", error);
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  const handleRevalidate = async () => {
+    if (!onRevalidate) return;
+    setIsRevalidating(true);
+    try {
+      await onRevalidate();
+    } catch (error) {
+      console.error("Failed to revalidate account:", error);
+    } finally {
+      setIsRevalidating(false);
     }
   };
 
@@ -224,9 +316,20 @@ export function AccountCard({
   };
 
   const isApiKeyAccount = account.auth_mode === "api_key";
+  const healthStatus = account.health?.status;
+  const healthBlocksActions = accountHealthBlocksAccountActions(account);
+  const healthHasProblem = Boolean(healthStatus && healthStatus !== "healthy");
+  const showHealthPanel = Boolean(
+    account.health && (healthHasProblem || account.health_history.length > 0)
+  );
+  const healthTone = healthStatus === "account_deactivated" || healthStatus === "workspace_deactivated"
+    ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900/70 dark:bg-red-950/35 dark:text-red-200"
+    : healthStatus === "healthy"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200"
+      : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/35 dark:text-amber-200";
   const planKey = effectivePlanType?.toLowerCase() || (isApiKeyAccount ? "api_key" : "free");
   const planColorClass = planColors[planKey] || planColors.free;
-  const supportsWarmup = !isApiKeyAccount && !account.disabled;
+  const supportsWarmup = !isApiKeyAccount && !account.disabled && !healthBlocksActions;
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at, t, locale);
   const compactResetCredits = !account.is_active;
 
@@ -282,6 +385,10 @@ export function AccountCard({
       className={`relative rounded-xl border transition-all duration-200 ${compact ? "p-4" : "p-5"} ${
         account.disabled
           ? "border-gray-200 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-950/50"
+          : healthStatus === "account_deactivated" || healthStatus === "workspace_deactivated"
+          ? "border-red-300 bg-white dark:border-red-800 dark:bg-gray-900"
+          : healthStatus === "reauth_required"
+          ? "border-amber-300 bg-white dark:border-amber-800 dark:bg-gray-900"
           : account.is_active
           ? "bg-white dark:bg-gray-900 border-emerald-400 shadow-sm"
           : "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
@@ -369,6 +476,15 @@ export function AccountCard({
               {t("accountCard.disabled")}
             </span>
           )}
+          {!account.disabled && healthHasProblem && account.health && (
+            <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+              healthStatus === "account_deactivated" || healthStatus === "workspace_deactivated"
+                ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
+                : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+            }`}>
+              {healthStatusLabel(account.health.status, t)}
+            </span>
+          )}
           <ResetCreditsMenu
             compact={compactResetCredits}
             resetCredits={resetCredits}
@@ -417,6 +533,63 @@ export function AccountCard({
         </div>
       )}
 
+      {!account.disabled && !isApiKeyAccount && showHealthPanel && account.health && (
+        <div className={`mb-3 rounded-lg border px-3 py-2.5 text-xs ${healthTone}`}>
+          <div className="min-w-0">
+            <div className="font-semibold">{healthStatusLabel(account.health.status, t)}</div>
+            <div className="mt-1 opacity-80">
+              {t("accountHealth.detectedAt", {
+                time: new Date(account.health.last_seen_at).toLocaleString(locale),
+              })}
+            </div>
+            {account.health.message && healthHasProblem && (
+              <p className="mt-1 break-words leading-5 opacity-90">{account.health.message}</p>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            {account.health.status === "reauth_required" && onReauthorize && (
+              <button
+                type="button"
+                onClick={onReauthorize}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700"
+              >
+                {t("accountHealth.reauthorize")}
+              </button>
+            )}
+            {account.health.status !== "healthy" &&
+              account.health.status !== "reauth_required" &&
+              onRevalidate && (
+                <button
+                  type="button"
+                  onClick={() => void handleRevalidate()}
+                  disabled={isRevalidating}
+                  className="rounded-lg border border-current/20 bg-white/60 px-3 py-1.5 font-medium hover:bg-white disabled:opacity-50 dark:bg-black/10 dark:hover:bg-black/20"
+                >
+                  {isRevalidating
+                    ? t("accountHealth.revalidating")
+                    : t("accountHealth.revalidate")}
+                </button>
+              )}
+          </div>
+          <details className="mt-2">
+            <summary className="cursor-pointer select-none font-medium">
+              {t("accountHealth.viewDiagnostics")}
+            </summary>
+            <div className="mt-2 space-y-2">
+              <HealthDiagnosticDetails diagnostic={account.health} locale={locale} t={t} />
+              {[...account.health_history].reverse().map((diagnostic, index) => (
+                <HealthDiagnosticDetails
+                  key={`${diagnostic.first_seen_at}-${diagnostic.status}-${index}`}
+                  diagnostic={diagnostic}
+                  locale={locale}
+                  t={t}
+                />
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
+
       {account.disabled ? (
         <div className="mb-3 rounded-lg border border-dashed border-gray-300 bg-white/60 px-3 py-2.5 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400">
           {t("accountCard.disabledDescription")}
@@ -425,7 +598,7 @@ export function AccountCard({
         <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50/80 px-3 py-2.5 text-xs leading-5 text-gray-600 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
           {t("accountCard.apiUsageManagedExternally")}
         </div>
-      ) : (
+      ) : healthHasProblem ? null : (
         <>
           {/* Usage */}
           <div className="mb-3">
@@ -463,15 +636,17 @@ export function AccountCard({
         ) : (
           <button
             onClick={onSwitch}
-            disabled={account.disabled || switching || switchDisabled}
+            disabled={account.disabled || healthBlocksActions || switching || switchDisabled}
             className={`min-w-32 flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
-              account.disabled || switchDisabled
+              account.disabled || healthBlocksActions || switchDisabled
                 ? "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed"
                 : "bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900"
             }`}
             data-tooltip={
               account.disabled
                 ? t("accountCard.enableBeforeSwitch")
+                : healthBlocksActions
+                  ? t("accountHealth.resolveBeforeSwitch")
                 : switchDisabled
                   ? t("accountCard.closeProcesses")
                   : undefined
@@ -479,6 +654,8 @@ export function AccountCard({
           >
             {account.disabled
               ? t("accountCard.disabled")
+              : healthBlocksActions
+                ? t("accountHealth.unavailable")
               : switching
                 ? t("accountCard.switching")
                 : switchDisabled

@@ -210,7 +210,9 @@ fn build_menu<R: Runtime>(
     }
 
     if let Some(account) = active_account {
-        let supports_usage_actions = !account.disabled && account.auth_mode == AuthMode::ChatGPT;
+        let supports_usage_actions = !account.disabled
+            && !account.health_blocks_account_actions()
+            && account.auth_mode == AuthMode::ChatGPT;
         let active_actions = Submenu::new(app, t("currentAccountActions"), true)?;
         active_actions.append(
             &MenuItemBuilder::with_id(REFRESH_ACTIVE_ITEM_ID, t("refreshCurrentAccount"))
@@ -415,7 +417,7 @@ fn recent_switch_accounts(store: &AccountsStore) -> Vec<&StoredAccount> {
     let mut accounts = store
         .accounts
         .iter()
-        .filter(|account| !account.disabled)
+        .filter(|account| !account.disabled && !account.health_blocks_account_actions())
         .collect::<Vec<_>>();
     accounts.sort_by(|left, right| {
         let left_is_active = active_id == Some(left.id.as_str());
@@ -771,7 +773,11 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
             .and_then(|id| get_account(&id).ok().flatten());
 
         if let Some(account) =
-            account.filter(|account| account.auth_mode == AuthMode::ChatGPT && !account.disabled)
+            account.filter(|account| {
+                account.auth_mode == AuthMode::ChatGPT
+                    && !account.disabled
+                    && !account.health_blocks_account_actions()
+            })
         {
             match tauri::async_runtime::block_on(fetch_usage_cached(&account.id, false)) {
                 // Keep the last known title on transient fetch errors.

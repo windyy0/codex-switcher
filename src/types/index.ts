@@ -5,6 +5,31 @@ export type DockDisplayMode = "show_in_dock" | "menu_bar_only";
 export type TaskbarLayout = "detailed" | "minimal" | "compact";
 export type TaskbarDoubleClickAction = "toggle_floating" | "open_main";
 export type FloatingField = "account" | "primary_usage" | "primary_reset" | "secondary_usage";
+export type AccountHealthStatus =
+  | "healthy"
+  | "reauth_required"
+  | "account_deactivated"
+  | "workspace_deactivated"
+  | "limited"
+  | "transient_error"
+  | "unknown";
+export type AccountHealthSource =
+  | "usage"
+  | "accounts_check"
+  | "token_refresh"
+  | "oauth"
+  | "oauth_user_report";
+
+export interface AccountHealthDiagnostic {
+  status: AccountHealthStatus;
+  source: AccountHealthSource;
+  http_status: number | null;
+  error_code: string | null;
+  message: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  occurrence_count: number;
+}
 
 export interface AppSettings {
   tray_display_mode: "icon_and_session" | "active_usage_text" | "hidden";
@@ -46,6 +71,8 @@ export interface AccountInfo {
   created_at: string;
   last_used_at: string | null;
   has_codex_config: boolean;
+  health: AccountHealthDiagnostic | null;
+  health_history: AccountHealthDiagnostic[];
 }
 
 export interface UsageInfo {

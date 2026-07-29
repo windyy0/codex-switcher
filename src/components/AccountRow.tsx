@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import type { AccountWithUsage } from "../types";
+import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
 import { getEffectivePlanType } from "../lib/accountPlan";
 import { isMonthlyWindow } from "../lib/usageWindow";
 
@@ -15,6 +16,8 @@ interface AccountRowProps {
   onSwitch: () => void;
   onWarmup: () => Promise<void>;
   onRefresh: () => Promise<unknown>;
+  onReauthorize?: () => void;
+  onRevalidate?: () => Promise<unknown>;
   onEnable: () => Promise<void>;
   onOpenDetails: () => void;
 }
@@ -86,9 +89,11 @@ function AccountQuota({ account }: { account: AccountWithUsage }) {
 
   if (account.disabled) {
     return (
-      <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-        {t("accountCard.disabled")}
-      </span>
+      <div className="flex h-full w-full items-center justify-start">
+        <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+          {t("accountCard.disabled")}
+        </span>
+      </div>
     );
   }
 
@@ -97,6 +102,36 @@ function AccountQuota({ account }: { account: AccountWithUsage }) {
       <span className="text-xs text-gray-500 dark:text-gray-400">
         {t("usage.apiKeyManagedExternally")}
       </span>
+    );
+  }
+
+  if (account.health && account.health.status !== "healthy") {
+    const label =
+      account.health.status === "reauth_required"
+        ? t("accountHealth.reauthRequired")
+        : account.health.status === "account_deactivated"
+          ? t("accountHealth.accountDeactivated")
+          : account.health.status === "workspace_deactivated"
+            ? t("accountHealth.workspaceDeactivated")
+            : account.health.status === "limited"
+              ? t("accountHealth.limited")
+              : account.health.status === "transient_error"
+                ? t("accountHealth.transientError")
+                : t("accountHealth.unknown");
+    return (
+      <div className="flex h-full w-full items-center justify-start gap-2">
+        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
+          account.health.status === "account_deactivated" ||
+          account.health.status === "workspace_deactivated"
+            ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+            : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+        }`}>
+          {label}
+        </span>
+        <span className="text-[11px] text-gray-400 underline decoration-dotted underline-offset-2 dark:text-gray-500">
+          {t("accountHealth.viewDiagnostics")}
+        </span>
+      </div>
     );
   }
 
@@ -198,6 +233,8 @@ export function AccountRow({
   onSwitch,
   onWarmup,
   onRefresh,
+  onReauthorize,
+  onRevalidate,
   onEnable,
   onOpenDetails,
 }: AccountRowProps) {
@@ -205,6 +242,7 @@ export function AccountRow({
   const locale = i18n.resolvedLanguage ?? "en-US";
   const plan = planPresentation(account, t);
   const isApiAccount = account.auth_mode === "api_key";
+  const healthBlocked = accountHealthBlocksAccountActions(account);
   const isCardLayout = layout === "card";
   const expiry = isApiAccount
     ? null
@@ -220,6 +258,18 @@ export function AccountRow({
       await onRefresh();
     } catch (error) {
       console.error("Failed to refresh account usage:", error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleRevalidate = async () => {
+    if (isRefreshing || !onRevalidate) return;
+    setRefreshing(true);
+    try {
+      await onRevalidate();
+    } catch (error) {
+      console.error("Failed to recheck account status:", error);
     } finally {
       setRefreshing(false);
     }
@@ -310,7 +360,28 @@ export function AccountRow({
             ? "md:col-start-3"
             : "md:col-start-4"
       }`}>
-        {!account.disabled && account.is_active ? (
+        {!account.disabled &&
+        account.health?.status === "reauth_required" &&
+        onReauthorize ? (
+          <button
+            type="button"
+            onClick={onReauthorize}
+            className="h-9 rounded-lg bg-amber-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-amber-700"
+          >
+            {t("accountHealth.reauthorize")}
+          </button>
+        ) : !account.disabled && healthBlocked && onRevalidate ? (
+          <button
+            type="button"
+            onClick={() => void handleRevalidate()}
+            disabled={isRefreshing}
+            className="h-9 rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:bg-amber-950/35 dark:text-amber-300 dark:hover:bg-amber-950/55"
+          >
+            {isRefreshing
+              ? t("accountHealth.revalidating")
+              : t("accountHealth.revalidate")}
+          </button>
+        ) : !account.disabled && account.is_active ? (
           <span className="inline-flex h-9 items-center rounded-lg bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300">
             ✓ {t("accountCard.active")}
           </span>
@@ -318,11 +389,21 @@ export function AccountRow({
           <button
             type="button"
             onClick={onSwitch}
-            disabled={switching || switchDisabled}
+            disabled={healthBlocked || switching || switchDisabled}
             className="h-9 min-w-20 rounded-lg bg-gray-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-45 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
-            data-tooltip={switchDisabled ? t("accountCard.closeProcesses") : undefined}
+            data-tooltip={
+              healthBlocked
+                ? t("accountHealth.resolveBeforeSwitch")
+                : switchDisabled
+                  ? t("accountCard.closeProcesses")
+                  : undefined
+            }
           >
-            {switching ? t("accountCard.switching") : t("accountCard.switch")}
+            {healthBlocked
+              ? t("accountHealth.unavailable")
+              : switching
+                ? t("accountCard.switching")
+                : t("accountCard.switch")}
           </button>
         ) : null}
 
@@ -337,7 +418,7 @@ export function AccountRow({
           </button>
         )}
 
-        {!account.disabled && account.auth_mode === "chat_g_p_t" && (
+        {!account.disabled && account.auth_mode === "chat_g_p_t" && !healthBlocked && (
           <>
             <button
               type="button"

@@ -6,6 +6,7 @@ import type {
   WarmupSummary,
   ImportAccountsSummary,
 } from "../types";
+import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 
 const ACCOUNT_USAGE_UPDATED_EVENT = "account-usage-updated";
@@ -70,9 +71,9 @@ export function useAccounts() {
     []
   );
 
-  const loadAccounts = useCallback(async (preserveUsage = false) => {
+  const loadAccounts = useCallback(async (preserveUsage = false, silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
       const accountList = await invokeBackend<AccountInfo[]>("list_accounts");
       
@@ -88,13 +89,19 @@ export function useAccounts() {
           );
           return accountList.map((a) => ({
             ...a,
-            usage: a.auth_mode === "chat_g_p_t" && !a.disabled
+            usage: a.auth_mode === "chat_g_p_t" &&
+              !a.disabled &&
+              !accountHealthBlocksAccountActions(a)
               ? usageMap.get(a.id)?.usage
               : undefined,
-            usageLoading: a.auth_mode === "chat_g_p_t" && !a.disabled
+            usageLoading: a.auth_mode === "chat_g_p_t" &&
+              !a.disabled &&
+              !accountHealthBlocksAccountActions(a)
               ? usageMap.get(a.id)?.usageLoading
               : false,
-            usageUpdatedAt: a.auth_mode === "chat_g_p_t" && !a.disabled
+            usageUpdatedAt: a.auth_mode === "chat_g_p_t" &&
+              !a.disabled &&
+              !accountHealthBlocksAccountActions(a)
               ? usageMap.get(a.id)?.usageUpdatedAt
               : undefined,
           }));
@@ -107,7 +114,7 @@ export function useAccounts() {
       setError(err instanceof Error ? err.message : String(err));
       throw err;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -126,12 +133,17 @@ export function useAccounts() {
         // endpoints. Keep them out of both metadata and usage polling instead
         // of manufacturing a recurring "usage unavailable" failure.
         list = list.filter(
-          (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+          (account) =>
+            account.auth_mode === "chat_g_p_t" &&
+            !account.disabled &&
+            !accountHealthBlocksAccountActions(account)
         );
 
         setAccounts((prev) =>
           prev.map((account) =>
-            account.auth_mode === "api_key" || account.disabled
+            account.auth_mode === "api_key" ||
+              account.disabled ||
+              accountHealthBlocksAccountActions(account)
               ? { ...account, usage: undefined, usageLoading: false, usageUpdatedAt: undefined }
               : account
           )
@@ -153,7 +165,10 @@ export function useAccounts() {
           );
 
           list = (await loadAccounts(true)).filter(
-            (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
+            (account) =>
+              account.auth_mode === "chat_g_p_t" &&
+              !account.disabled &&
+              !accountHealthBlocksAccountActions(account)
           );
         }
 
@@ -205,6 +220,7 @@ export function useAccounts() {
         );
 
         reportUsageToTray(Array.from(usageResults.values()));
+        await loadAccounts(true, true);
       } catch (err) {
         console.error("Failed to refresh usage:", err);
         throw err;
@@ -264,6 +280,7 @@ export function useAccounts() {
         )
       );
       reportUsageToTray([usage]);
+      await loadAccounts(true, true);
       return usage;
     } catch (err) {
       console.error("Failed to refresh single usage:", err);
@@ -279,6 +296,7 @@ export function useAccounts() {
             : a
         )
       );
+      await loadAccounts(true, true);
       throw err;
     }
   }, [buildUsageError, loadAccounts, reportUsageToTray]);
@@ -387,11 +405,14 @@ export function useAccounts() {
     [loadAccounts, refreshUsage]
   );
 
-  const startOAuthLogin = useCallback(async (accountName: string) => {
+  const startOAuthLogin = useCallback(async (
+    accountName: string,
+    targetAccountId?: string
+  ) => {
     try {
       const info = await invokeBackend<{ auth_url: string; callback_port: number }>(
         "start_login",
-        { accountName }
+        { accountName, targetAccountId: targetAccountId ?? null }
       );
       return info;
     } catch (err) {
@@ -399,17 +420,36 @@ export function useAccounts() {
     }
   }, []);
 
-  const completeOAuthLogin = useCallback(async () => {
+  const completeOAuthLogin = useCallback(async (targetAccountId?: string) => {
     try {
       const account = await invokeBackend<AccountInfo>("complete_login");
+      if (targetAccountId) {
+        await loadAccounts(true, true);
+        return account;
+      }
       void loadAccounts()
         .then((accountList) => refreshUsage(accountList))
         .catch((err) => console.error("Failed to refresh accounts after login:", err));
       return account;
     } catch (err) {
+      if (targetAccountId) {
+        await loadAccounts(true, true).catch(() => {});
+      }
       throw err;
     }
   }, [loadAccounts, refreshUsage]);
+
+  const reportOAuthPageError = useCallback(async (
+    accountId: string,
+    errorText: string
+  ) => {
+    const account = await invokeBackend<AccountInfo>("report_oauth_page_error", {
+      accountId,
+      errorText,
+    });
+    await loadAccounts(true, true);
+    return account;
+  }, [loadAccounts]);
 
   const exportAccountsSlimText = useCallback(async () => {
     try {
@@ -578,6 +618,7 @@ export function useAccounts() {
     importAccountsFullEncryptedFile,
     startOAuthLogin,
     completeOAuthLogin,
+    reportOAuthPageError,
     cancelOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,

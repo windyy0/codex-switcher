@@ -10,7 +10,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::types::{AccountsStore, AppSettings, AuthData, StoredAccount};
+use crate::account_health::apply_health_observation;
+use crate::types::{AccountHealthObservation, AccountsStore, AppSettings, AuthData, StoredAccount};
 
 pub(crate) const MAX_CONSUMED_REFRESH_TOKEN_HASHES: usize = 512;
 
@@ -349,6 +350,24 @@ pub fn set_active_account(account_id: &str) -> Result<()> {
 pub fn get_account(account_id: &str) -> Result<Option<StoredAccount>> {
     let store = load_accounts()?;
     Ok(store.accounts.into_iter().find(|a| a.id == account_id))
+}
+
+/// Persist a sanitized account-health observation. Callers must hold the
+/// account transition lock around this read-modify-write operation.
+pub fn record_account_health(
+    account_id: &str,
+    observation: AccountHealthObservation,
+) -> Result<StoredAccount> {
+    let mut store = load_accounts()?;
+    let account = store
+        .accounts
+        .iter_mut()
+        .find(|account| account.id == account_id)
+        .context("Account not found")?;
+    apply_health_observation(account, observation);
+    let updated = account.clone();
+    save_accounts(&store)?;
+    Ok(updated)
 }
 
 /// Get the currently active account
