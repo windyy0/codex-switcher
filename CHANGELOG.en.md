@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.0] - 2026-07-29
+
 ### Added
 
 - Added account health diagnostics that distinguish expired authorization, account deactivation, workspace deactivation, request limits, and transient failures from explicit usage, account-check, token-refresh, and login responses, while retaining sanitized error codes, provider messages, timestamps, and recent diagnostic history.
