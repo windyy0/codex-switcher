@@ -18,7 +18,8 @@ export type AccountHealthSource =
   | "accounts_check"
   | "token_refresh"
   | "oauth"
-  | "oauth_user_report";
+  | "oauth_user_report"
+  | "deactivation_email";
 
 export interface AccountHealthDiagnostic {
   status: AccountHealthStatus;
@@ -26,6 +27,7 @@ export interface AccountHealthDiagnostic {
   http_status: number | null;
   error_code: string | null;
   message: string | null;
+  deactivated_at?: string | null;
   first_seen_at: string;
   last_seen_at: string;
   occurrence_count: number;

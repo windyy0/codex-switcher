@@ -27,9 +27,10 @@ use commands::{
     get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage,
     import_accounts_full_encrypted_file, import_accounts_slim_text, kill_codex_processes,
     list_accounts, open_main_window, refresh_account_metadata, refresh_all_accounts_usage,
-    rename_account, report_oauth_page_error, report_usage, set_account_disabled,
-    set_api_account_config, set_app_language, set_app_settings, set_dock_display_mode,
-    set_masked_account_ids, start_login, switch_account, warmup_account, warmup_all_accounts,
+    rename_account, report_account_deactivation_email, report_oauth_page_error, report_usage,
+    set_account_disabled, set_api_account_config, set_app_language, set_app_settings,
+    set_dock_display_mode, set_masked_account_ids, start_login, switch_account, warmup_account,
+    warmup_all_accounts,
 };
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -122,6 +123,7 @@ pub fn run() {
             complete_login,
             cancel_login,
             report_oauth_page_error,
+            report_account_deactivation_email,
             // Usage
             get_usage,
             get_account_usage_stats,

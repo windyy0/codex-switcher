@@ -451,6 +451,18 @@ export function useAccounts() {
     return account;
   }, [loadAccounts]);
 
+  const reportAccountDeactivationEmail = useCallback(async (
+    accountId: string,
+    emailText: string
+  ) => {
+    const account = await invokeBackend<AccountInfo>("report_account_deactivation_email", {
+      accountId,
+      emailText,
+    });
+    await loadAccounts(true, true);
+    return account;
+  }, [loadAccounts]);
+
   const exportAccountsSlimText = useCallback(async () => {
     try {
       return await invokeBackend<string>("export_accounts_slim_text");
@@ -619,6 +631,7 @@ export function useAccounts() {
     startOAuthLogin,
     completeOAuthLogin,
     reportOAuthPageError,
+    reportAccountDeactivationEmail,
     cancelOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,

@@ -179,15 +179,35 @@
     "starting": "正在生成登录链接…",
     "tryAgain": "重新尝试",
     "pageErrorTitle": "浏览器显示了身份验证错误？",
-    "pageErrorHelp": "如果授权页面没有自动返回 CS，可以直接确认常见的停用提示，或复制完整错误内容后粘贴到下方进行识别。",
+    "pageErrorHelp": "可以直接确认常见的停用提示，复制浏览器错误信息，或粘贴 OpenAI 发来的账户停用邮件原文到下方进行识别。",
     "reportAccountDeactivated": "页面显示账号已删除或停用",
     "pastePageError": "复制并粘贴授权页面错误",
     "pasteFromClipboard": "从剪贴板粘贴",
-    "pageErrorPlaceholder": "粘贴错误页面文字、错误代码和请求 ID，例如：account_deactivated",
+    "pageErrorPlaceholder": "粘贴浏览器错误、邮件原文（含标题/发件人/时间/正文），或直接输入 account_deactivated",
     "submitPageError": "识别错误并结束等待",
     "recordingPageError": "正在记录…",
-    "pageErrorRecorded": "已停止等待，并根据授权页面提示将此账户记录为已停用。",
+    "pageErrorRecorded": "已停止等待，并根据提交的信息将此账户记录为已停用。",
     "clipboardEmpty": "剪贴板中没有可识别的文字。",
+    "clipboardReadFailed": "无法读取剪贴板，请在输入框中按 Ctrl+V 手动粘贴。",
+    "detectedEmailDate": "检测到停用邮件日期：{{date}}",
+    "copyLinkFailed": "无法复制登录链接，请选中链接后手动复制。"
+  },
+  "deactivationReport": {
+    "title": "录入账户停用邮件",
+    "help": "粘贴 OpenAI 发来的完整停用邮件。Codex Switcher 会核对停用提示、账户邮箱和邮件日期，然后将该账户标记为已停用。",
+    "emailContent": "停用邮件原文",
+    "pasteFromClipboard": "从剪贴板粘贴",
+    "placeholder": "粘贴完整邮件，包括主题、发件人、时间和正文",
+    "detectedEmail": "检测到账户邮箱：{{email}}",
+    "detectedDate": "检测到停用日期：{{date}}",
+    "recognized": "已识别为账户停用通知。",
+    "notRecognized": "未识别到支持的账户或工作区停用提示。",
+    "unrecognizedDate": "找到了日期但无法识别：{{date}}",
+    "emailMismatch": "邮件中的邮箱与当前所选账户不一致。",
+    "record": "标记为已停用",
+    "recording": "正在记录…",
+    "recorded": "停用邮件已保存，该账户已标记为已停用。",
+    "clipboardEmpty": "剪贴板中没有文字。",
     "clipboardReadFailed": "无法读取剪贴板，请在输入框中按 Ctrl+V 手动粘贴。"
   },
   "accountHealth": {
@@ -211,8 +231,10 @@
     "sourceTokenRefresh": "令牌刷新",
     "sourceOAuth": "登录授权",
     "sourceOAuthUserReport": "授权页面（用户确认）",
+    "sourceDeactivationEmail": "停用邮件（用户录入）",
     "errorCode": "错误码",
     "originalMessage": "原始提示",
+    "deactivatedAt": "停用时间",
     "firstSeen": "首次检测",
     "lastSeen": "最近确认",
     "occurrences": "出现次数：{{count}}"
@@ -227,7 +249,7 @@
     "rename": "点击重命名", "disabled": "已停用", "disable": "停用", "enable": "启用", "disableAccount": "停用账户", "enableAccount": "重新启用账户", "enableBeforeSwitch": "请先启用此账户再切换", "disabledDescription": "此账户已停用，自动请求和预热均已暂停，但保存的数据仍会保留。", "showInfo": "显示信息", "hideInfo": "隐藏信息", "lastUpdated": "最后更新：{{time}}", "apiUsageManagedExternally": "API Key 账户不提供统一的用量和订阅信息，请前往对应服务商后台查看。", "active": "当前使用",
     "closeProcesses": "请先关闭所有 Codex 进程", "switching": "切换中...", "codexRunning": "Codex 正在运行", "switch": "切换",
     "warmupSending": "正在发送预热请求...", "warmupSend": "发送最小预热请求", "autoAll": "已为所有账户开启自动预热",
-    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "warmupFailed": "最近一次预热失败", "warmupModelUnavailable": "预热模型不可用", "autoWarmupPaused": "自动和定时预热已暂停；手动预热成功后会自动恢复。", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "删除账户", "manage": "更多账户操作"
+    "autoDisable": "关闭此账户的自动预热", "autoEnable": "开启此账户的自动预热", "warmupFailed": "最近一次预热失败", "warmupModelUnavailable": "预热模型不可用", "autoWarmupPaused": "自动和定时预热已暂停；手动预热成功后会自动恢复。", "refreshUsage": "刷新用量", "apiConfig": "编辑 API config.toml", "remove": "删除账户", "manage": "更多账户操作", "reportDeactivation": "录入停用邮件"
   },
   "apiConfig": {
     "title": "API 账户配置",

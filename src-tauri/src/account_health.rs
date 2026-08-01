@@ -131,6 +131,7 @@ fn contains_exact_deactivation_phrase(message: &str, workspace: bool) -> bool {
             "account_deactivated",
             "account has been deactivated",
             "account is deactivated",
+            "access deactivated",
         ]
     };
     phrases.iter().any(|phrase| message.contains(phrase))
@@ -245,6 +246,7 @@ pub fn apply_health_observation(
             http_status: observation.http_status,
             error_code: observation.error_code,
             message: observation.message,
+            deactivated_at: None,
             first_seen_at: now,
             last_seen_at: now,
             occurrence_count: 1,

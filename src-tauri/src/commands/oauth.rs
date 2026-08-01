@@ -1,11 +1,12 @@
 //! OAuth login Tauri commands
 
+use chrono::{DateTime, Utc};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
-use crate::account_health::classify_error_message;
+use crate::account_health::{apply_health_observation, classify_error_message};
 use crate::auth::oauth_server::{start_oauth_login, wait_for_oauth_login, OAuthLoginResult};
 use crate::auth::{
     add_account, finalize_account_auth_sync, get_codex_home_identity, load_accounts,
@@ -204,32 +205,165 @@ pub async fn report_oauth_page_error(
         );
     }
 
-    let pending = {
-        let mut pending = PENDING_OAUTH.lock().unwrap();
+    let pending_cancelled = {
+        let pending = PENDING_OAUTH.lock().unwrap();
         let current = pending
             .as_ref()
             .ok_or_else(|| "No pending OAuth login".to_string())?;
         if current.target_account_id.as_deref() != Some(account_id.as_str()) {
             return Err("The pending OAuth login belongs to a different account".to_string());
         }
-        pending
-            .take()
-            .ok_or_else(|| "No pending OAuth login".to_string())?
+        current.cancelled.clone()
     };
-    pending.cancelled.store(true, Ordering::Relaxed);
 
+    let account = record_user_deactivation_report(
+        &account_id,
+        error_text,
+        AccountHealthSource::OAuthUserReport,
+    )?;
+
+    // Only cancel the OAuth waiter after the report has passed every account,
+    // email, and persistence check. Otherwise the cancellation error can hide
+    // the actual validation failure from the user.
+    pending_cancelled.store(true, Ordering::Relaxed);
+    clear_pending_oauth_if_current(&pending_cancelled);
+    Ok(account)
+}
+
+/// Record a deactivation email without requiring an OAuth flow to be active.
+#[tauri::command]
+pub async fn report_account_deactivation_email(
+    account_id: String,
+    email_text: String,
+) -> Result<AccountInfo, String> {
+    record_user_deactivation_report(
+        &account_id,
+        email_text.trim(),
+        AccountHealthSource::DeactivationEmail,
+    )
+}
+
+fn record_user_deactivation_report(
+    account_id: &str,
+    report_text: &str,
+    source: AccountHealthSource,
+) -> Result<AccountInfo, String> {
+    if report_text.is_empty() {
+        return Err("Paste the deactivation notice before recording it".to_string());
+    }
+
+    let observation = classify_error_message(source, report_text);
+    if !matches!(
+        observation.status,
+        AccountHealthStatus::AccountDeactivated | AccountHealthStatus::WorkspaceDeactivated
+    ) {
+        return Err(
+            "The pasted text did not contain a supported account_deactivated or workspace_deactivated signal"
+                .to_string(),
+        );
+    }
+
+    let reported_email = extract_email_address(report_text);
+    let deactivated_at = extract_deactivation_date(report_text);
     let _transition_guard = lock_account_transition()?;
-    record_account_health(&account_id, observation)
-        .map_err(|storage_error| storage_error.to_string())?;
+    let mut store = load_accounts().map_err(|storage_error| storage_error.to_string())?;
+    let active_id = store.active_account_id.clone();
+    let updated = {
+        let account = store
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| format!("Account not found: {account_id}"))?;
+        if account.auth_mode != AuthMode::ChatGPT {
+            return Err(
+                "Only ChatGPT accounts can be marked from a deactivation email".to_string(),
+            );
+        }
+        if let (Some(existing), Some(reported)) =
+            (account.email.as_deref(), reported_email.as_deref())
+        {
+            if !existing.eq_ignore_ascii_case(reported) {
+                return Err(format!(
+                    "The deactivation email belongs to {reported}, not {existing}"
+                ));
+            }
+        }
 
-    let store = load_accounts().map_err(|storage_error| storage_error.to_string())?;
-    let active_id = store.active_account_id.as_deref();
-    let account = store
-        .accounts
-        .iter()
-        .find(|account| account.id == account_id)
-        .ok_or_else(|| format!("Account not found: {account_id}"))?;
-    Ok(AccountInfo::from_stored(account, active_id))
+        apply_health_observation(account, observation);
+        if let (Some(health), Some(reported_date)) =
+            (account.health.as_mut(), deactivated_at)
+        {
+            health.deactivated_at = Some(reported_date);
+        }
+        if account.email.is_none() {
+            account.email = reported_email;
+        }
+        account.clone()
+    };
+    save_accounts(&store).map_err(|storage_error| storage_error.to_string())?;
+    Ok(AccountInfo::from_stored(&updated, active_id.as_deref()))
+}
+
+fn extract_deactivation_date(report_text: &str) -> Option<DateTime<Utc>> {
+    let raw = find_labeled_value(report_text, &["时间", "time", "date"])?;
+    DateTime::parse_from_rfc3339(&raw)
+        .or_else(|_| DateTime::parse_from_rfc2822(&raw))
+        .ok()
+        .map(|date| date.with_timezone(&Utc))
+}
+
+fn find_labeled_value(text: &str, labels: &[&str]) -> Option<String> {
+    let lines = text.lines().collect::<Vec<_>>();
+    for (index, raw_line) in lines.iter().enumerate() {
+        let line = raw_line.trim().trim_matches('*').trim();
+        let separator = line
+            .find(':')
+            .map(|offset| (offset, ':'.len_utf8()))
+            .or_else(|| line.find('：').map(|offset| (offset, '：'.len_utf8())));
+        let Some((offset, separator_len)) = separator else {
+            continue;
+        };
+        let label = line[..offset].trim();
+        if !labels
+            .iter()
+            .any(|candidate| label.eq_ignore_ascii_case(candidate))
+        {
+            continue;
+        }
+
+        let inline_value = line[offset + separator_len..].trim();
+        if !inline_value.is_empty() {
+            return Some(inline_value.to_string());
+        }
+        if let Some(next_value) = lines[index + 1..]
+            .iter()
+            .map(|next| next.trim().trim_matches('*').trim())
+            .find(|next| !next.is_empty())
+        {
+            return Some(next_value.to_string());
+        }
+    }
+    None
+}
+
+fn extract_email_address(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|token| {
+            token.trim_matches(|character: char| {
+                !(character.is_ascii_alphanumeric()
+                    || matches!(character, '@' | '.' | '_' | '%' | '+' | '-'))
+            })
+        })
+        .find(|candidate| {
+            let mut parts = candidate.split('@');
+            let local = parts.next().unwrap_or_default();
+            let domain = parts.next().unwrap_or_default();
+            !local.is_empty()
+                && domain.contains('.')
+                && parts.next().is_none()
+                && !domain.ends_with('.')
+        })
+        .map(str::to_string)
 }
 
 fn persist_oauth_deactivation_if_present(account_id: &str, error: &str) {
@@ -416,6 +550,21 @@ fn clear_pending_oauth_if_current(cancelled: &Arc<AtomicBool>) {
 mod tests {
     use super::*;
 
+    const DEACTIVATION_EMAIL: &str = r#"**主题:**
+OpenAI - Access Deactivated [C-DYEDw7i4Kzc1]
+**发件人:**
+OpenAI
+**时间:**
+2026-07-23T09:17:20Z
+**内容:**
+
+Hello,
+
+We're writing with an important update about your ChatGPT account associated with laurettastoltenbergxe@outlook.com (User ID: user-RYM1RBgCzBmPF1ucHZ93BLOK).
+
+Your account has been deactivated because recent activity violated our Terms and Usage Policies.
+"#;
+
     #[test]
     fn pasted_oauth_page_error_preserves_manual_source() {
         let observation = classify_error_message(
@@ -439,5 +588,30 @@ mod tests {
         );
 
         assert_eq!(observation.status, AccountHealthStatus::Unknown);
+    }
+
+    #[test]
+    fn parses_markdown_deactivation_email_metadata() {
+        assert_eq!(
+            extract_email_address(DEACTIVATION_EMAIL).as_deref(),
+            Some("laurettastoltenbergxe@outlook.com")
+        );
+        assert_eq!(
+            extract_deactivation_date(DEACTIVATION_EMAIL).map(|date| date.to_rfc3339()),
+            Some("2026-07-23T09:17:20+00:00".to_string())
+        );
+        let observation =
+            classify_error_message(AccountHealthSource::DeactivationEmail, DEACTIVATION_EMAIL);
+        assert_eq!(observation.status, AccountHealthStatus::AccountDeactivated);
+        assert_eq!(observation.source, AccountHealthSource::DeactivationEmail);
+    }
+
+    #[test]
+    fn recognizes_access_deactivated_email_subject() {
+        let observation = classify_error_message(
+            AccountHealthSource::DeactivationEmail,
+            "OpenAI - Access Deactivated [case-id]",
+        );
+        assert_eq!(observation.status, AccountHealthStatus::AccountDeactivated);
     }
 }

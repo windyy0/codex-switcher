@@ -86,8 +86,11 @@ function QuotaLine({
 
 function AccountQuota({ account }: { account: AccountWithUsage }) {
   const { t } = useTranslation();
+  const isDeactivated =
+    account.health?.status === "account_deactivated" ||
+    account.health?.status === "workspace_deactivated";
 
-  if (account.disabled) {
+  if (account.disabled && !isDeactivated) {
     return (
       <div className="flex h-full w-full items-center justify-start">
         <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">

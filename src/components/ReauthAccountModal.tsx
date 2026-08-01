@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AccountInfo, UsageInfo } from "../types";
 import { openExternalUrl } from "../lib/platform";
+import { extractDeactivationEmailDetails } from "../lib/deactivationEmail";
 
 interface ReauthAccountModalProps {
   account: AccountInfo | null;
@@ -41,18 +42,46 @@ export function ReauthAccountModal({
   const [pageErrorText, setPageErrorText] = useState("");
   const [pageError, setPageError] = useState<string | null>(null);
   const [isReportingPageError, setIsReportingPageError] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const attemptRef = useRef(0);
   const reportingPageErrorRef = useRef(false);
+  const autoStartedAccountRef = useRef<string | null>(null);
+  const emailDetails = useMemo(
+    () => extractDeactivationEmailDetails(pageErrorText),
+    [pageErrorText]
+  );
+  const displayDate = emailDetails.deactivatedAt
+    ? new Date(emailDetails.deactivatedAt).toLocaleString()
+    : emailDetails.rawDate;
+  const emailMismatch = Boolean(
+    account?.email &&
+      emailDetails.email &&
+      account.email.toLocaleLowerCase() !== emailDetails.email.toLocaleLowerCase()
+  );
 
   useEffect(() => {
+    if (!account) {
+      autoStartedAccountRef.current = null;
+      attemptRef.current += 1;
+      return;
+    }
+    if (autoStartedAccountRef.current === account.id) return;
+    autoStartedAccountRef.current = account.id;
     attemptRef.current += 1;
-    setPhase("idle");
+    setPhase("starting");
     setAuthUrl("");
     setError(null);
     setPageErrorText("");
     setPageError(null);
     setIsReportingPageError(false);
+    setCopied(false);
+    setLinkError(null);
     reportingPageErrorRef.current = false;
+    start().catch((err) => {
+      console.error("Reauth auto-start failed:", err);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account?.id]);
 
   if (!account) return null;
@@ -74,15 +103,13 @@ export function ReauthAccountModal({
     setAuthUrl("");
     setPageErrorText("");
     setPageError(null);
+    setLinkError(null);
 
     try {
       const info = await onStart(account.name, account.id);
       if (attemptRef.current !== attempt) return;
       setAuthUrl(info.auth_url);
       setPhase("waiting");
-      void openExternalUrl(info.auth_url).catch((openError) => {
-        console.warn("Could not open the authorization URL automatically:", openError);
-      });
 
       await onComplete(account.id);
       if (attemptRef.current !== attempt) return;
@@ -176,9 +203,12 @@ export function ReauthAccountModal({
         </div>
 
         <div className="space-y-4 p-5">
-          <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">
-            {t("reauth.description")}
-          </p>
+          {(phase === "starting") && (
+            <div className="flex items-center justify-center py-4">
+              <div className="animate-spin h-6 w-6 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mr-3"></div>
+              <span className="text-sm text-gray-600 dark:text-gray-300">{t("reauth.starting")}</span>
+            </div>
+          )}
 
           {(phase === "waiting" || phase === "validating") && (
             <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950/35 dark:text-blue-200">
@@ -228,12 +258,38 @@ export function ReauthAccountModal({
                   />
                   <button
                     type="button"
+                    onClick={() => {
+                      void navigator.clipboard
+                        .writeText(authUrl)
+                        .then(() => {
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        })
+                        .catch(() => {
+                          setLinkError(t("reauth.copyLinkFailed"));
+                        });
+                    }}
+                    className={`shrink-0 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                      copied
+                        ? "border-green-200 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300"
+                        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                    }`}
+                  >
+                    {copied ? t("common.copied") : t("common.copy")}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => void openExternalUrl(authUrl)}
                     className="shrink-0 rounded-lg bg-gray-900 px-3 py-2 text-xs font-medium text-white dark:bg-gray-100 dark:text-gray-900"
                   >
                     {t("common.open")}
                   </button>
                 </div>
+                {linkError && (
+                  <p className="text-xs text-red-600 dark:text-red-300" role="alert">
+                    {linkError}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
@@ -273,15 +329,53 @@ export function ReauthAccountModal({
                   </div>
                   <textarea
                     value={pageErrorText}
-                    onChange={(event) => setPageErrorText(event.target.value)}
+                    onChange={(event) => {
+                      setPageErrorText(event.target.value);
+                      setPageError(null);
+                    }}
                     rows={4}
                     placeholder={t("reauth.pageErrorPlaceholder")}
                     className="w-full resize-y rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs leading-5 text-gray-700 outline-none focus:border-amber-400 dark:border-amber-800 dark:bg-gray-900 dark:text-gray-200"
                   />
+                  {displayDate && (
+                    <p className="text-xs text-amber-800 dark:text-amber-200">
+                      {t("reauth.detectedEmailDate", { date: displayDate })}
+                    </p>
+                  )}
+                  {emailDetails.email && (
+                    <p className={`text-xs ${
+                      emailMismatch
+                        ? "font-medium text-red-700 dark:text-red-300"
+                        : "text-amber-800 dark:text-amber-200"
+                    }`}>
+                      {t("deactivationReport.detectedEmail", { email: emailDetails.email })}
+                    </p>
+                  )}
+                  {pageErrorText.trim() && (
+                    <p className={`text-xs font-medium ${
+                      emailDetails.isDeactivationNotice
+                        ? "text-emerald-700 dark:text-emerald-300"
+                        : "text-red-700 dark:text-red-300"
+                    }`}>
+                      {t(emailDetails.isDeactivationNotice
+                        ? "deactivationReport.recognized"
+                        : "deactivationReport.notRecognized")}
+                    </p>
+                  )}
+                  {emailMismatch && (
+                    <p className="text-xs font-medium text-red-700 dark:text-red-300" role="alert">
+                      {t("deactivationReport.emailMismatch")}
+                    </p>
+                  )}
                   <button
                     type="button"
                     onClick={() => void reportPageError(pageErrorText)}
-                    disabled={isReportingPageError || !pageErrorText.trim()}
+                    disabled={
+                      isReportingPageError ||
+                      !pageErrorText.trim() ||
+                      emailMismatch ||
+                      !emailDetails.isDeactivationNotice
+                    }
                     className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-gray-900 dark:text-amber-200 dark:hover:bg-amber-950/50"
                   >
                     {isReportingPageError

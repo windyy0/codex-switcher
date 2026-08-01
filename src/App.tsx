@@ -7,6 +7,7 @@ import {
   AccountCard,
   AccountRow,
   AddAccountModal,
+  DeactivationReportModal,
   ReauthAccountModal,
   UpdateChecker,
   requestUpdateCheck,
@@ -252,6 +253,7 @@ function App() {
     startOAuthLogin,
     completeOAuthLogin,
     reportOAuthPageError,
+    reportAccountDeactivationEmail,
     cancelOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
@@ -259,6 +261,7 @@ function App() {
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [reauthAccountId, setReauthAccountId] = useState<string | null>(null);
+  const [deactivationReportAccountId, setDeactivationReportAccountId] = useState<string | null>(null);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [apiConfigAccount, setApiConfigAccount] = useState<AccountWithUsage | null>(null);
   const [apiConfigText, setApiConfigText] = useState("");
@@ -1896,6 +1899,8 @@ function App() {
   const otherAccounts = accounts.filter((a) => !a.is_active);
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null;
   const reauthAccount = accounts.find((account) => account.id === reauthAccountId) ?? null;
+  const deactivationReportAccount =
+    accounts.find((account) => account.id === deactivationReportAccountId) ?? null;
   const deleteConfirmAccount =
     accounts.find((account) => account.id === deleteConfirmId) ?? null;
   const hasRunningProcesses = processInfo && processInfo.count > 0;
@@ -2237,6 +2242,7 @@ function App() {
       onDelete={() => handleDelete(account.id)}
       onRefresh={() => refreshSingleUsage(account.id, { refreshMetadata: true })}
       onReauthorize={() => setReauthAccountId(account.id)}
+      onReportDeactivation={() => setDeactivationReportAccountId(account.id)}
       onRevalidate={() => refreshSingleUsage(account.id)}
       onRename={(newName) => renameAccount(account.id, newName)}
       onToggleDisabled={() => setAccountDisabled(account.id, !account.disabled)}
@@ -2310,12 +2316,12 @@ function App() {
                     <div className="inline-flex shrink-0 items-center gap-1">
                       <span
                         className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-0.5 rounded-md text-xs border ${hasRunningProcesses
-                            ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700"
-                            : "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-700"
+                            ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-700"
+                            : "bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700"
                           }`}
                       >
                         <span
-                          className={`inline-block w-1.5 h-1.5 rounded-full ${hasRunningProcesses ? "bg-amber-500" : "bg-green-500"
+                          className={`inline-block w-1.5 h-1.5 rounded-full ${hasRunningProcesses ? "bg-green-500" : "bg-gray-400"
                             }`}
                         ></span>
                         <span>
@@ -2343,7 +2349,7 @@ function App() {
                     <button
                       onClick={handleOpenCodexApp}
                       disabled={isOpeningCodex}
-                      className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100 disabled:opacity-50 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/30"
+                      className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30"
                       data-tooltip={t("header.openCodex")}
                     >
                       {isOpeningCodex ? t("header.opening") : t("header.openCodex")}
@@ -2867,6 +2873,7 @@ function App() {
                 onDelete={() => handleDelete(selectedAccount.id)}
                 onRefresh={() => refreshSingleUsage(selectedAccount.id, { refreshMetadata: true })}
                 onReauthorize={() => setReauthAccountId(selectedAccount.id)}
+                onReportDeactivation={() => setDeactivationReportAccountId(selectedAccount.id)}
                 onRevalidate={() => refreshSingleUsage(selectedAccount.id)}
                 onRename={(newName) => renameAccount(selectedAccount.id, newName)}
                 onToggleDisabled={() => setAccountDisabled(selectedAccount.id, !selectedAccount.disabled)}
@@ -3121,6 +3128,12 @@ function App() {
         onValidate={(accountId) => refreshSingleUsage(accountId)}
         onReportPageError={reportOAuthPageError}
         onCancel={cancelOAuthLogin}
+      />
+
+      <DeactivationReportModal
+        account={deactivationReportAccount}
+        onClose={() => setDeactivationReportAccountId(null)}
+        onReport={reportAccountDeactivationEmail}
       />
 
       {apiConfigAccount && (

@@ -6,6 +6,16 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Added
+
+- Added a “Record deactivation email” action to ChatGPT account details. Users can paste an OpenAI deactivation notice without starting reauthorization; Codex Switcher verifies the account email and persists the notice date as structured diagnostic data.
+
+### Improved
+
+- Reauthorization now matches the add-account login flow: after generating a login link, users can choose “Copy” or “Open” instead of the browser opening automatically, with explicit feedback when copying fails and clear email-recognition results.
+- The Codex process indicator in the upper-left is now gray when no process is running and green when processes are detected; the “Open Codex” button is now blue.
+- Disabled accounts continue to show explicit deactivation diagnostics, email source, and deactivation date so the recorded information can be reviewed or updated later.
+
 ## [0.107.0] - 2026-07-29
 
 ### Added

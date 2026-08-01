@@ -414,6 +414,7 @@ pub enum AccountHealthSource {
     #[serde(rename = "oauth")]
     OAuth,
     OAuthUserReport,
+    DeactivationEmail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,6 +433,10 @@ pub struct AccountHealthDiagnostic {
     pub http_status: Option<u16>,
     pub error_code: Option<String>,
     pub message: Option<String>,
+    /// Date reported by a deactivation notice, which may predate when the
+    /// notice was entered into Codex Switcher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deactivated_at: Option<DateTime<Utc>>,
     pub first_seen_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
     pub occurrence_count: u32,

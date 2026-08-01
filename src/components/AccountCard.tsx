@@ -25,6 +25,7 @@ interface AccountCardProps {
   onDelete: () => void;
   onRefresh: () => Promise<unknown>;
   onReauthorize?: () => void;
+  onReportDeactivation?: () => void;
   onRevalidate?: () => Promise<unknown>;
   onRename: (newName: string) => Promise<void>;
   onToggleDisabled: () => Promise<void>;
@@ -153,6 +154,8 @@ function healthSourceLabel(
       return t("accountHealth.sourceOAuth");
     case "oauth_user_report":
       return t("accountHealth.sourceOAuthUserReport");
+    case "deactivation_email":
+      return t("accountHealth.sourceDeactivationEmail");
   }
 }
 
@@ -178,6 +181,12 @@ function HealthDiagnosticDetails({
       {diagnostic.message && (
         <div className="break-words">{t("accountHealth.originalMessage")}: {diagnostic.message}</div>
       )}
+      {diagnostic.deactivated_at && (
+        <div>
+          {t("accountHealth.deactivatedAt")}: {" "}
+          {new Date(diagnostic.deactivated_at).toLocaleString(locale)}
+        </div>
+      )}
       <div>
         {t("accountHealth.firstSeen")}:{" "}
         {new Date(diagnostic.first_seen_at).toLocaleString(locale)}
@@ -198,6 +207,7 @@ export function AccountCard({
   onDelete,
   onRefresh,
   onReauthorize,
+  onReportDeactivation,
   onRevalidate,
   onRename,
   onToggleDisabled,
@@ -476,7 +486,7 @@ export function AccountCard({
               {t("accountCard.disabled")}
             </span>
           )}
-          {!account.disabled && healthHasProblem && account.health && (
+          {healthHasProblem && account.health && (
             <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
               healthStatus === "account_deactivated" || healthStatus === "workspace_deactivated"
                 ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
@@ -533,7 +543,7 @@ export function AccountCard({
         </div>
       )}
 
-      {!account.disabled && !isApiKeyAccount && showHealthPanel && account.health && (
+      {!isApiKeyAccount && showHealthPanel && account.health && (
         <div className={`mb-3 rounded-lg border px-3 py-2.5 text-xs ${healthTone}`}>
           <div className="min-w-0">
             <div className="font-semibold">{healthStatusLabel(account.health.status, t)}</div>
@@ -542,6 +552,12 @@ export function AccountCard({
                 time: new Date(account.health.last_seen_at).toLocaleString(locale),
               })}
             </div>
+            {account.health.deactivated_at && (
+              <div className="mt-1 font-medium">
+                {t("accountHealth.deactivatedAt")}: {" "}
+                {new Date(account.health.deactivated_at).toLocaleString(locale)}
+              </div>
+            )}
             {account.health.message && healthHasProblem && (
               <p className="mt-1 break-words leading-5 opacity-90">{account.health.message}</p>
             )}
@@ -749,6 +765,18 @@ export function AccountCard({
                   {t("accountCard.apiConfig")}
                 </button>
               )}
+              {!isApiKeyAccount && onReportDeactivation && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    managementMenuRef.current?.removeAttribute("open");
+                    onReportDeactivation();
+                  }}
+                  className="w-full rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
+                >
+                  {t("accountCard.reportDeactivation")}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -774,6 +802,16 @@ export function AccountCard({
           </details>
         ) : (
           <>
+            {!isApiKeyAccount && onReportDeactivation && (
+              <button
+                type="button"
+                onClick={onReportDeactivation}
+                className="whitespace-nowrap rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/40"
+                data-tooltip={t("accountCard.reportDeactivation")}
+              >
+                {t("accountCard.reportDeactivation")}
+              </button>
+            )}
             <button
               onClick={() => void handleToggleDisabled()}
               disabled={isTogglingDisabled}

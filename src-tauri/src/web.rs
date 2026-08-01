@@ -17,8 +17,9 @@ use crate::commands::{
     get_active_account_info, get_api_account_config, get_app_language, get_masked_account_ids,
     import_accounts_full_encrypted_bytes, import_accounts_slim_text, kill_codex_processes,
     list_accounts, refresh_account_metadata, refresh_all_accounts_usage, rename_account,
-    report_oauth_page_error, set_account_disabled, set_api_account_config, set_masked_account_ids,
-    start_login, switch_account, warmup_account, warmup_all_accounts,
+    report_account_deactivation_email, report_oauth_page_error, set_account_disabled,
+    set_api_account_config, set_masked_account_ids, start_login, switch_account, warmup_account,
+    warmup_all_accounts,
 };
 use crate::types::AppLanguage;
 
@@ -82,6 +83,15 @@ struct OAuthPageErrorArgs {
     account_id: String,
     #[serde(alias = "error_text")]
     error_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeactivationEmailArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    #[serde(alias = "email_text")]
+    email_text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,6 +292,10 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         "report_oauth_page_error" => {
             let args: OAuthPageErrorArgs = parse_args(payload)?;
             to_json(report_oauth_page_error(args.account_id, args.error_text).await?)
+        }
+        "report_account_deactivation_email" => {
+            let args: DeactivationEmailArgs = parse_args(payload)?;
+            to_json(report_account_deactivation_email(args.account_id, args.email_text).await?)
         }
         "export_accounts_slim_text" => to_json(export_accounts_slim_text().await?),
         "import_accounts_slim_text" => {
