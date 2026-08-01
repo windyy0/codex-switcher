@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.1] - 2026-08-01
+
 ### Added
 
 - Added a “Record deactivation email” action to ChatGPT account details. Users can paste an OpenAI deactivation notice without starting reauthorization; Codex Switcher verifies the account email and persists the notice date as structured diagnostic data.
