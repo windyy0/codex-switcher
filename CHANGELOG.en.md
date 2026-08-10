@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.2] - 2026-08-10
+
 ### Fixed
 
 - Fixed Windows taskbar account names not using middle ellipsis when the widget overlaps an adjacent component such as TrafficMonitor.
