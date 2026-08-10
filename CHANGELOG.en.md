@@ -6,6 +6,11 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the title-bar clock labeling UTC as OpenAI time; it now shows the time at OpenAI's San Francisco headquarters and automatically follows daylight saving time.
+- Restored standard Windows tray behavior: closing the main window from the title bar or taskbar now hides it, while only “Quit Codex Switcher” in the tray menu exits the app.
+
 ## [0.107.2] - 2026-08-10
 
 ### Fixed

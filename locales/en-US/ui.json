@@ -35,7 +35,7 @@
     "languageDescription": "Choose the language used throughout the application.",
     "timeSection": "Time display",
     "timeDisplay": "Show dual-zone clock",
-    "timeDisplayDescription": "Show local time and OpenAI/UTC time in the title bar for easier quota reset comparisons.",
+    "timeDisplayDescription": "Show local time and the time at OpenAI's San Francisco headquarters, with daylight saving handled automatically.",
     "taskbarSection": "Windows taskbar",
     "taskbarWidget": "Taskbar usage widget",
     "taskbarDescription": "Show Codex limits beside the Windows notification area.",
@@ -104,7 +104,7 @@
     "lightMode": "Switch to light mode",
     "darkMode": "Switch to dark mode",
     "localTime": "Local",
-    "openaiTime": "OpenAI/UTC",
+    "openaiTime": "OpenAI/SF",
     "timeDisplay": "Show dual-zone clock",
     "accountMenu": "Account",
     "addAccount": "+ Add Account"
