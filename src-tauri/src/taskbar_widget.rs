@@ -37,14 +37,15 @@ use windows::{
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowExW,
-                FindWindowW, GetClientRect, GetParent, GetWindowLongW, GetWindowRect, IsWindow,
-                LoadCursorW, RegisterClassW, RegisterWindowMessageW, SendMessageW,
-                SetLayeredWindowAttributes, SetParent, SetWindowLongW, SetWindowPos, ShowWindow,
-                TranslateMessage, CS_DBLCLKS, CW_USEDEFAULT, GWL_STYLE, HMENU, IDC_ARROW,
-                LWA_COLORKEY, MSG, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_DESTROY,
-                WM_ERASEBKGND, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL,
-                WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW, WS_CHILD, WS_EX_LAYERED,
-                WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+                FindWindowW, GetClientRect, GetParent, GetWindow, GetWindowLongW, GetWindowRect,
+                IsWindow, IsWindowVisible, LoadCursorW, RegisterClassW, RegisterWindowMessageW,
+                SendMessageW, SetLayeredWindowAttributes, SetParent, SetWindowLongW, SetWindowPos,
+                ShowWindow, TranslateMessage, CS_DBLCLKS, CW_USEDEFAULT, GWL_STYLE, GW_CHILD,
+                GW_HWNDNEXT, HMENU, IDC_ARROW, LWA_COLORKEY, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
+                SW_HIDE, SW_SHOW, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW,
+                WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+                WS_POPUP, WS_VISIBLE,
             },
         },
     },
@@ -702,7 +703,9 @@ unsafe fn render_gdi(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
         };
         draw_left(&mut weekly_rect, &weekly, memory_dc);
         draw_left(&mut reset_rect, &reset, memory_dc);
-        let account_width = reserve_account_text_width(&mut account_rect, dpi);
+        let visible_right =
+            visible_account_right(hwnd, &account_rect).unwrap_or(account_rect.right);
+        let account_width = reserve_account_text_width(&mut account_rect, visible_right, dpi);
         let account = fit_account_name(&account, account_width, memory_dc);
         draw_left(&mut account_rect, &account, memory_dc);
     } else if layout == TaskbarLayout::Detailed {
@@ -741,7 +744,9 @@ unsafe fn render_gdi(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
         draw_left(&mut top_first, &top_left, memory_dc);
         draw_left(&mut top_second, &top_right, memory_dc);
         draw_left(&mut bottom_first, &bottom_left, memory_dc);
-        let account_width = reserve_account_text_width(&mut bottom_second, dpi);
+        let visible_right =
+            visible_account_right(hwnd, &bottom_second).unwrap_or(bottom_second.right);
+        let account_width = reserve_account_text_width(&mut bottom_second, visible_right, dpi);
         let account = fit_account_name(&bottom_right, account_width, memory_dc);
         draw_left(&mut bottom_second, &account, memory_dc);
     } else if layout == TaskbarLayout::Compact {
@@ -775,8 +780,63 @@ unsafe fn render_gdi(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
     let _ = DeleteDC(memory_dc);
 }
 
-fn reserve_account_text_width(rect: &mut RECT, dpi: i32) -> i32 {
+unsafe fn visible_account_right(hwnd: HWND, account_rect: &RECT) -> Option<i32> {
+    let taskbar = GetParent(hwnd).unwrap_or_default();
+    if taskbar.0.is_null() {
+        return None;
+    }
+
+    let mut widget_rect = RECT::default();
+    if GetWindowRect(hwnd, &mut widget_rect).is_err() {
+        return None;
+    }
+
+    let mut visible_right = account_rect.right;
+    let mut sibling = GetWindow(taskbar, GW_CHILD).unwrap_or_default();
+    while !sibling.0.is_null() {
+        if sibling != hwnd && IsWindowVisible(sibling).as_bool() {
+            let mut sibling_rect = RECT::default();
+            if GetWindowRect(sibling, &mut sibling_rect).is_ok() {
+                if let Some(boundary) =
+                    account_occlusion_boundary(&widget_rect, account_rect, &sibling_rect)
+                {
+                    visible_right = visible_right.min(boundary);
+                }
+            }
+        }
+        sibling = GetWindow(sibling, GW_HWNDNEXT).unwrap_or_default();
+    }
+
+    (visible_right < account_rect.right).then_some(visible_right)
+}
+
+fn account_occlusion_boundary(
+    widget_rect: &RECT,
+    account_rect: &RECT,
+    sibling_rect: &RECT,
+) -> Option<i32> {
+    let account_left = widget_rect.left + account_rect.left;
+    let account_top = widget_rect.top + account_rect.top;
+    let account_right = widget_rect.left + account_rect.right;
+    let account_bottom = widget_rect.top + account_rect.bottom;
+
+    let has_area = sibling_rect.right > sibling_rect.left && sibling_rect.bottom > sibling_rect.top;
+    let overlaps_account = sibling_rect.right > account_left
+        && sibling_rect.left < account_right
+        && sibling_rect.bottom > account_top
+        && sibling_rect.top < account_bottom;
+    // The Windows taskbar's composition surface spans the whole taskbar and sits behind all
+    // components. Only treat a sibling that begins inside this widget as a foreground occluder.
+    if !has_area || !overlaps_account || sibling_rect.left <= widget_rect.left {
+        return None;
+    }
+
+    Some((sibling_rect.left - widget_rect.left).clamp(account_rect.left, account_rect.right))
+}
+
+fn reserve_account_text_width(rect: &mut RECT, visible_right: i32, dpi: i32) -> i32 {
     let margin = (ACCOUNT_SAFE_MARGIN_PX * dpi / 96).max(4);
+    rect.right = rect.right.min(visible_right).max(rect.left);
     rect.right = rect.right.saturating_sub(margin).max(rect.left);
     rect.right - rect.left
 }
@@ -1190,6 +1250,75 @@ mod tests {
             middle_ellipsis("work", 10, |value| value.chars().count() as i32),
             "work"
         );
+    }
+
+    #[test]
+    fn overlapping_taskbar_sibling_limits_account_width() {
+        let widget = RECT {
+            left: 1_507,
+            top: 1_528,
+            right: 1_843,
+            bottom: 1_600,
+        };
+        let account = RECT {
+            left: 132,
+            top: 36,
+            right: 330,
+            bottom: 60,
+        };
+        let traffic_monitor = RECT {
+            left: 1_784,
+            top: 1_540,
+            right: 2_043,
+            bottom: 1_588,
+        };
+
+        assert_eq!(
+            account_occlusion_boundary(&widget, &account, &traffic_monitor),
+            Some(277)
+        );
+    }
+
+    #[test]
+    fn taskbar_background_surface_does_not_limit_account_width() {
+        let widget = RECT {
+            left: 1_507,
+            top: 1_528,
+            right: 1_843,
+            bottom: 1_600,
+        };
+        let account = RECT {
+            left: 132,
+            top: 36,
+            right: 330,
+            bottom: 60,
+        };
+        let taskbar_surface = RECT {
+            left: 0,
+            top: 1_528,
+            right: 2_560,
+            bottom: 1_600,
+        };
+
+        assert_eq!(
+            account_occlusion_boundary(&widget, &account, &taskbar_surface),
+            None
+        );
+    }
+
+    #[test]
+    fn account_width_reserves_margin_after_occlusion() {
+        let mut account = RECT {
+            left: 132,
+            top: 36,
+            right: 330,
+            bottom: 60,
+        };
+
+        let width = reserve_account_text_width(&mut account, 277, 144);
+
+        assert_eq!(account.right, 265);
+        assert_eq!(width, 133);
     }
 
     #[test]

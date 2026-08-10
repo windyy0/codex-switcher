@@ -81,6 +81,14 @@ pub fn run() {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
+                    #[cfg(target_os = "windows")]
+                    {
+                        // Windows routes both the title-bar close button and the taskbar
+                        // "Close window" command through this event. Treat both as an explicit
+                        // request to quit instead of silently hiding the release build to tray.
+                        tauri::Manager::app_handle(window).exit(0);
+                        return;
+                    }
                     #[cfg(target_os = "macos")]
                     if commands::should_prompt_for_close_behavior() {
                         let payload = commands::window::next_close_behavior_prompt_payload();
@@ -93,6 +101,7 @@ pub fn run() {
                             window.emit(commands::window::CLOSE_BEHAVIOR_REQUESTED_EVENT, payload);
                         return;
                     }
+                    #[cfg(not(target_os = "windows"))]
                     commands::hide_main_window(&tauri::Manager::app_handle(window));
                 }
             }
