@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.3] - 2026-08-10
+
 ### Fixed
 
 - Fixed the title-bar clock labeling UTC as OpenAI time; it now shows the time at OpenAI's San Francisco headquarters and automatically follows daylight saving time.
