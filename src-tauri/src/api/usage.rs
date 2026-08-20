@@ -258,7 +258,7 @@ async fn warmup_with_chatgpt_auth(account: &StoredAccount) -> Result<()> {
 
 fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_json::Value {
     let mut payload = json!({
-        "model": "gpt-5.4-mini",
+        "model": "gpt-5.6-luna",
         "instructions": "You are Codex.",
         "input": [
             {
@@ -267,7 +267,7 @@ fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_
                 "content": [
                     {
                         "type": "input_text",
-                        "text": "Hi"
+                        "text": "Thanks"
                     }
                 ]
             }
@@ -742,6 +742,14 @@ mod tests {
 
         assert_eq!(usage_error.to_string(), "Account is disabled");
         assert_eq!(warmup_error.to_string(), "Account is disabled");
+    }
+
+    #[test]
+    fn warmup_payload_matches_upstream_model_and_prompt() {
+        let payload = build_warmup_payload(true, false);
+
+        assert_eq!(payload["model"], "gpt-5.6-luna");
+        assert_eq!(payload["input"][0]["content"][0]["text"], "Thanks");
     }
 
     #[test]

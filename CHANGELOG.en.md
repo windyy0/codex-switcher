@@ -6,6 +6,10 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Improved
+
+- Updated automatic warm-up to use `gpt-5.6-luna` and changed the minimal warm-up prompt to `Thanks`, matching the upstream warm-up strategy.
+
 ## [0.107.3] - 2026-08-10
 
 ### Fixed
