@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAccounts } from "./hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
+import { useResetCredits } from "./hooks/useResetCredits";
 import {
   AccountCard,
   AccountRow,
@@ -258,6 +259,25 @@ function App() {
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   } = useAccounts();
+  const {
+    resetCreditsByAccount,
+    refreshResetCredits,
+    storeResetCredits,
+  } = useResetCredits(accounts);
+
+  const refreshAccountData = useCallback(
+    async (accountId: string) => {
+      const [usage] = await Promise.all([
+        refreshSingleUsage(accountId, { refreshMetadata: true }),
+        refreshResetCredits(accountId, true).catch((error) => {
+          console.warn("Failed to refresh account reset credits:", error);
+          return null;
+        }),
+      ]);
+      return usage;
+    },
+    [refreshResetCredits, refreshSingleUsage],
+  );
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [reauthAccountId, setReauthAccountId] = useState<string | null>(null);
@@ -777,7 +797,17 @@ function App() {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      await refreshUsage(undefined, { refreshMetadata: true });
+      await Promise.all([
+        refreshUsage(undefined, { refreshMetadata: true }),
+        Promise.all(
+          accounts
+            .filter((account) => account.auth_mode === "chat_g_p_t" && !account.disabled)
+            .map((account) => refreshResetCredits(account.id, true).catch((error) => {
+              console.warn("Failed to refresh account reset credits:", error);
+              return null;
+            })),
+        ),
+      ]);
       setRefreshSuccess(true);
       setTimeout(() => setRefreshSuccess(false), 2000);
     } catch (err) {
@@ -2240,7 +2270,7 @@ function App() {
       }}
       onWarmup={() => handleWarmupAccount(account.id, account.name)}
       onDelete={() => handleDelete(account.id)}
-      onRefresh={() => refreshSingleUsage(account.id, { refreshMetadata: true })}
+      onRefresh={() => refreshAccountData(account.id)}
       onReauthorize={() => setReauthAccountId(account.id)}
       onReportDeactivation={() => setDeactivationReportAccountId(account.id)}
       onRevalidate={() => refreshSingleUsage(account.id)}
@@ -2266,6 +2296,8 @@ function App() {
       onToggleAutoWarmup={() => toggleAutoWarmupAccount(account.id)}
       warmupFailure={warmupFailures[account.id]}
       onDismissWarmupFailure={() => dismissWarmupFailure(account.id)}
+      resetCredits={resetCreditsByAccount[account.id] ?? null}
+      onResetCreditsLoaded={storeResetCredits}
       statsDefaultOpen={false}
       compact
     />
@@ -2757,12 +2789,12 @@ function App() {
                         {t("accounts.activeHeading")}
                       </h2>
                     </div>
-                    <div className="overflow-hidden rounded-2xl border border-emerald-300 bg-white shadow-sm dark:border-emerald-800 dark:bg-gray-900">
+                    <div className="overflow-visible rounded-2xl border border-emerald-300 bg-white shadow-sm dark:border-emerald-800 dark:bg-gray-900">
                       <AccountRow
                         account={activeAccount}
                         onSwitch={() => { }}
                         onWarmup={() => handleWarmupAccount(activeAccount.id, activeAccount.name)}
-                        onRefresh={() => refreshSingleUsage(activeAccount.id, { refreshMetadata: true })}
+                        onRefresh={() => refreshAccountData(activeAccount.id)}
                         onReauthorize={() => setReauthAccountId(activeAccount.id)}
                         onRevalidate={() => refreshSingleUsage(activeAccount.id)}
                         onEnable={() => setAccountDisabled(activeAccount.id, false)}
@@ -2775,6 +2807,7 @@ function App() {
                           autoWarmupRunningIds.has(activeAccount.id)
                         }
                         masked={maskedAccounts.has(activeAccount.id)}
+                        resetCredits={resetCreditsByAccount[activeAccount.id] ?? null}
                       />
                     </div>
                   </section>
@@ -2791,14 +2824,14 @@ function App() {
                       </span>
                     </div>
                     {accountBrowserToolbar}
-                    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                    <div className="overflow-visible rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
                       {visibleOtherAccounts.length > 0 ? visibleOtherAccounts.map((account) => (
                         <AccountRow
                           key={account.id}
                           account={account}
                           onSwitch={() => handleSwitch(account.id)}
                           onWarmup={() => handleWarmupAccount(account.id, account.name)}
-                          onRefresh={() => refreshSingleUsage(account.id, { refreshMetadata: true })}
+                          onRefresh={() => refreshAccountData(account.id)}
                           onReauthorize={() => setReauthAccountId(account.id)}
                           onRevalidate={() => refreshSingleUsage(account.id)}
                           onEnable={() => setAccountDisabled(account.id, false)}
@@ -2811,6 +2844,7 @@ function App() {
                             autoWarmupRunningIds.has(account.id)
                           }
                           masked={maskedAccounts.has(account.id)}
+                          resetCredits={resetCreditsByAccount[account.id] ?? null}
                         />
                       )) : (
                         <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
@@ -2871,7 +2905,7 @@ function App() {
                 }}
                 onWarmup={() => handleWarmupAccount(selectedAccount.id, selectedAccount.name)}
                 onDelete={() => handleDelete(selectedAccount.id)}
-                onRefresh={() => refreshSingleUsage(selectedAccount.id, { refreshMetadata: true })}
+                onRefresh={() => refreshAccountData(selectedAccount.id)}
                 onReauthorize={() => setReauthAccountId(selectedAccount.id)}
                 onReportDeactivation={() => setDeactivationReportAccountId(selectedAccount.id)}
                 onRevalidate={() => refreshSingleUsage(selectedAccount.id)}
@@ -2899,6 +2933,8 @@ function App() {
                 onToggleAutoWarmup={() => toggleAutoWarmupAccount(selectedAccount.id)}
                 warmupFailure={warmupFailures[selectedAccount.id]}
                 onDismissWarmupFailure={() => dismissWarmupFailure(selectedAccount.id)}
+                resetCredits={resetCreditsByAccount[selectedAccount.id] ?? null}
+                onResetCreditsLoaded={storeResetCredits}
                 statsDefaultOpen={false}
               />
             </div>

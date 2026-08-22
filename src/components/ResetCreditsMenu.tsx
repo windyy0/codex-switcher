@@ -1,7 +1,11 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AccountResetCredits } from "../types";
-import { formatResetCreditDateTime, getAvailableResetCredits } from "../lib/resetCredits";
+import {
+  formatResetCreditDate,
+  formatResetCreditDateTime,
+  getAvailableResetCredits,
+} from "../lib/resetCredits";
 
 function getResetCreditsTone(resetCredits: AccountResetCredits | null): {
   container: string;
@@ -42,10 +46,10 @@ function getResetCreditsTone(resetCredits: AccountResetCredits | null): {
 }
 
 export function ResetCreditsMenu({
-  compact,
+  variant,
   resetCredits,
 }: {
-  compact: boolean;
+  variant: "card" | "compact" | "list";
   resetCredits: AccountResetCredits | null;
 }) {
   const { t, i18n } = useTranslation();
@@ -57,6 +61,7 @@ export function ResetCreditsMenu({
   const count = availableCredits.length;
   const countLabel = t("accountCard.resetCount", { count });
   const locale = i18n.resolvedLanguage ?? "en-US";
+  const compact = variant !== "card";
   const nextExpiry = formatResetCreditDateTime(
     availableCredits[0]?.expires_at ?? null,
     { compact, locale },
@@ -70,6 +75,14 @@ export function ResetCreditsMenu({
             date: nextExpiry,
           });
   const tone = getResetCreditsTone(resetCredits);
+  const listExpiryValue = formatResetCreditDate(availableCredits[0]?.expires_at ?? null, {
+    locale,
+  });
+  const listExpiry = listExpiryValue === "No expiry"
+    ? t("accountCard.resetNoExpiry")
+    : listExpiryValue === "Expiry unavailable"
+      ? t("accountCard.resetExpiryUnavailable")
+      : listExpiryValue;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -100,55 +113,74 @@ export function ResetCreditsMenu({
   if (count === 0) return null;
 
   return (
-    <div ref={wrapperRef} className="relative min-w-0 max-w-full">
+    <div ref={wrapperRef} className={`relative min-w-0 max-w-full ${variant === "list" ? "group h-full justify-self-end" : ""}`}>
       <button
         ref={buttonRef}
         type="button"
-        aria-expanded={isOpen}
+        aria-expanded={variant === "list" ? undefined : isOpen}
         aria-controls={popupId}
         aria-haspopup="dialog"
-        onClick={() => setIsOpen((open) => !open)}
-        className={
-          compact
+        onClick={variant === "list" ? undefined : () => setIsOpen((open) => !open)}
+        className={variant === "list"
+          ? "flex h-full min-w-0 flex-col justify-center rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 md:text-right dark:hover:bg-gray-800"
+          : compact
             ? `flex min-w-0 max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] leading-none transition-colors hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-sky-400/60 ${tone.container} ${tone.text}`
-            : `flex max-w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-xs transition-colors hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-sky-400/60 ${tone.container}`
-        }
-        title={`${countLabel} · ${nextExpiryLabel} · ${t("accountCard.resetDetails")}`}
+            : `flex max-w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-xs transition-colors hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-sky-400/60 ${tone.container}`}
+        title={variant === "list"
+          ? undefined
+          : `${countLabel} · ${nextExpiryLabel} · ${t("accountCard.resetDetails")}`}
       >
-        <span
-          className={
-            compact
-              ? "shrink-0 whitespace-nowrap font-semibold"
-              : `whitespace-nowrap rounded-full border px-2.5 py-0.5 font-medium ${tone.badge}`
-          }
-        >
-          {countLabel}
-        </span>
-        <span className={`truncate ${compact ? "" : tone.text}`}>
-          · {nextExpiryLabel}
-        </span>
-        <svg
-          className={`h-3 w-3 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
-          viewBox="0 0 12 12"
-          fill="none"
-          aria-hidden="true"
-        >
-          <path
-            d="m3 4.5 3 3 3-3"
-            stroke="currentColor"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="1.5"
-          />
-        </svg>
+        {variant === "list" ? (
+          <>
+            <span className="w-full truncate text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              {countLabel}
+            </span>
+            <span className={`mt-1 w-full truncate text-xs font-medium ${tone.text}`}>
+              {listExpiry}
+            </span>
+          </>
+        ) : (
+          <>
+            <span
+              className={compact
+                ? "shrink-0 whitespace-nowrap font-semibold"
+                : `whitespace-nowrap rounded-full border px-2.5 py-0.5 font-medium ${tone.badge}`}
+            >
+              {countLabel}
+            </span>
+            <span className={`truncate ${compact ? "" : tone.text}`}>
+              · {nextExpiryLabel}
+            </span>
+          </>
+        )}
+        {variant !== "list" && (
+          <svg
+            className={`h-3 w-3 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
+            viewBox="0 0 12 12"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="m3 4.5 3 3 3-3"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.5"
+            />
+          </svg>
+        )}
       </button>
 
-      {isOpen && (
+      {(variant === "list" || isOpen) && (
         <div
           id={popupId}
           role="dialog"
           aria-label={t("accountCard.resetDetails")}
-          className="absolute right-0 top-full z-30 mt-2 w-80 max-w-[calc(100vw-3rem)] overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-xl dark:border-gray-700 dark:bg-gray-900"
+          className={`absolute right-0 top-full z-30 mt-2 w-80 max-w-[calc(100vw-3rem)] overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-xl transition-all dark:border-gray-700 dark:bg-gray-900 ${
+            variant === "list"
+              ? "pointer-events-none invisible translate-y-1 opacity-0 group-hover:pointer-events-auto group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100"
+              : ""
+          }`}
         >
           <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2.5 dark:border-gray-800">
             <span className="text-xs font-semibold text-gray-900 dark:text-gray-100">

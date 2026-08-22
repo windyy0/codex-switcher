@@ -51,3 +51,19 @@ export function formatResetCreditDateTime(
     ...(options.timeZone ? { timeZone: options.timeZone } : {}),
   }).format(expiry);
 }
+
+export function formatResetCreditDate(
+  expiresAt: string | null,
+  options: Pick<ResetCreditDateTimeFormatOptions, "locale" | "timeZone"> = {},
+): string {
+  if (!expiresAt) return "No expiry";
+
+  const expiry = new Date(expiresAt);
+  if (Number.isNaN(expiry.getTime())) return "Expiry unavailable";
+
+  return new Intl.DateTimeFormat(options.locale, {
+    month: "short",
+    day: "numeric",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+  }).format(expiry);
+}

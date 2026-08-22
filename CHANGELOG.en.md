@@ -6,6 +6,15 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Added
+
+- Added manual reset-credit information to list view, showing the available count and nearest expiry before subscription expiry; hover or keyboard focus reveals per-credit details.
+
+### Improved
+
+- Moved reset credits to a shared per-account cache with in-flight request deduplication, so switching between list and card layouts no longer refetches them; single-account and global refreshes now update reset credits too.
+- Rebalanced list-row spacing across account identity, usage, reset credits, subscription expiry, and actions, with consistent hover styling for reset and subscription information.
+
 ## [0.107.4] - 2026-08-21
 
 ### Improved

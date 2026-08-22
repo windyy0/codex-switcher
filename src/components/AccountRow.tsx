@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import type { AccountWithUsage } from "../types";
+import type { AccountResetCredits, AccountWithUsage } from "../types";
 import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
 import { getEffectivePlanType } from "../lib/accountPlan";
+import { getAvailableResetCredits } from "../lib/resetCredits";
 import { isMonthlyWindow } from "../lib/usageWindow";
+import { ResetCreditsMenu } from "./ResetCreditsMenu";
 
 interface AccountRowProps {
   account: AccountWithUsage;
@@ -13,6 +15,7 @@ interface AccountRowProps {
   switching?: boolean;
   switchDisabled?: boolean;
   warmingUp?: boolean;
+  resetCredits?: AccountResetCredits | null;
   onSwitch: () => void;
   onWarmup: () => Promise<void>;
   onRefresh: () => Promise<unknown>;
@@ -233,6 +236,7 @@ export function AccountRow({
   switching = false,
   switchDisabled = false,
   warmingUp = false,
+  resetCredits = null,
   onSwitch,
   onWarmup,
   onRefresh,
@@ -247,9 +251,16 @@ export function AccountRow({
   const isApiAccount = account.auth_mode === "api_key";
   const healthBlocked = accountHealthBlocksAccountActions(account);
   const isCardLayout = layout === "card";
-  const expiry = isApiAccount
-    ? null
-    : formatExpiry(account.subscription_expires_at, locale, t);
+  const expiry = !isApiAccount && account.subscription_expires_at
+    ? formatExpiry(account.subscription_expires_at, locale, t)
+    : null;
+  const visibleResetCredits = account.disabled ? null : resetCredits;
+  const hasResetCredits = getAvailableResetCredits(visibleResetCredits).length > 0;
+  const listGridColumns = isApiAccount || (!expiry && !hasResetCredits)
+    ? "md:grid-cols-[minmax(12rem,0.85fr)_minmax(16rem,1.6fr)_auto]"
+    : expiry && hasResetCredits
+      ? "md:grid-cols-[minmax(12rem,0.85fr)_minmax(16rem,1.6fr)_max-content_max-content_auto]"
+      : "md:grid-cols-[minmax(12rem,0.85fr)_minmax(16rem,1.6fr)_max-content_auto]";
   const [refreshing, setRefreshing] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const isRefreshing = refreshing || Boolean(account.usageLoading);
@@ -298,47 +309,58 @@ export function AccountRow({
               ? "border-emerald-300 bg-emerald-50/45 dark:border-emerald-800 dark:bg-emerald-950/15"
               : "border-gray-200 bg-white hover:border-gray-300 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
           }`
-        : `grid min-h-20 grid-cols-1 items-center gap-3 border-b border-gray-100 px-4 py-2.5 transition-colors last:border-b-0 dark:border-gray-800/80 ${
-            isApiAccount
-              ? "md:grid-cols-[minmax(0,1.15fr)_minmax(16rem,1.6fr)_auto]"
-              : "md:grid-cols-[minmax(0,1.15fr)_minmax(16rem,1.6fr)_11rem_auto]"
-          } ${
+        : `grid min-h-20 grid-cols-1 items-center gap-y-3 rounded-none border-b border-gray-100 px-4 py-2.5 transition-colors first:rounded-t-2xl last:rounded-b-2xl last:border-b-0 md:gap-x-1 ${listGridColumns} dark:border-gray-800/80 ${
             account.is_active
               ? "bg-emerald-50/45 dark:bg-emerald-950/15"
               : "hover:bg-gray-50/80 dark:hover:bg-gray-800/35"
           }`}
     >
-      <button
-        type="button"
-        onClick={onOpenDetails}
-        className="min-w-0 text-left outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-emerald-500"
-      >
+      <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
-          {account.is_active && <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />}
-          <span className={`truncate font-semibold text-gray-900 dark:text-gray-100 ${masked ? "select-none blur-sm" : ""}`}>
-            {account.name}
-          </span>
-          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${plan.color}`}>
-            {plan.plan}
-          </span>
+          <button
+            type="button"
+            onClick={onOpenDetails}
+            className="flex min-w-0 items-center gap-2 text-left outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-emerald-500"
+          >
+            {account.is_active && <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />}
+            <span className={`truncate font-semibold text-gray-900 dark:text-gray-100 ${masked ? "select-none blur-sm" : ""}`}>
+              {account.name}
+            </span>
+            <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${plan.color}`}>
+              {plan.plan}
+            </span>
+          </button>
         </div>
         {account.email && (
-          <div className={`mt-1 truncate text-xs text-gray-500 dark:text-gray-400 ${masked ? "select-none blur-sm" : ""}`}>
+          <button
+            type="button"
+            onClick={onOpenDetails}
+            className={`mt-1 block max-w-full truncate text-left text-xs text-gray-500 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-emerald-500 dark:text-gray-400 ${masked ? "select-none blur-sm" : ""}`}
+          >
             {account.email}
-          </div>
+          </button>
         )}
-      </button>
+      </div>
 
       <button
         type="button"
         onClick={onOpenDetails}
         className={`${isCardLayout
           ? "mt-4 min-h-[4.5rem] rounded-xl bg-gray-50 p-3 dark:bg-gray-950/65"
-          : "h-full"
+          : "h-full w-full max-w-md justify-self-center"
         } min-w-0 text-left outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-emerald-500`}
       >
         <AccountQuota account={account} />
       </button>
+
+      {hasResetCredits && (
+        <div className={isCardLayout ? "" : "h-full md:ml-6"}>
+          <ResetCreditsMenu
+            variant={isCardLayout ? "compact" : "list"}
+            resetCredits={visibleResetCredits}
+          />
+        </div>
+      )}
 
       {expiry && (
         <button
@@ -346,8 +368,8 @@ export function AccountRow({
           onClick={onOpenDetails}
           className={`${isCardLayout
             ? "mt-3 flex items-center justify-between gap-3 rounded-lg px-1"
-            : "md:text-right"
-          } min-w-0 text-left outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-emerald-500`}
+            : `h-full justify-self-end rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 md:text-right dark:hover:bg-gray-800 ${hasResetCredits ? "" : "md:ml-6"}`
+          } min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-emerald-500`}
         >
           <div className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
             {t("accounts.subscriptionExpiry")}
@@ -359,9 +381,7 @@ export function AccountRow({
       <div className={`flex items-center justify-end gap-2 ${
         isCardLayout
           ? "mt-auto border-t border-gray-100 pt-4 dark:border-gray-800"
-          : isApiAccount
-            ? "md:col-start-3"
-            : "md:col-start-4"
+          : ""
       }`}>
         {!account.disabled &&
         account.health?.status === "reauth_required" &&

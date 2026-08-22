@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  formatResetCreditDate,
   formatResetCreditDateTime,
   getAvailableResetCredits,
 } from "../src/lib/resetCredits.ts";
@@ -60,6 +61,16 @@ test("reset expiry includes both date and local time", () => {
       timeZone: "UTC",
     }),
     "Jul 28, 8:30 AM",
+  );
+});
+
+test("list reset expiry uses a date-only compact label", () => {
+  assert.equal(
+    formatResetCreditDate("2026-09-20T22:21:10Z", {
+      locale: "en-US",
+      timeZone: "UTC",
+    }),
+    "Sep 20",
   );
 });
 

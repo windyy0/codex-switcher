@@ -11,12 +11,9 @@ import type {
 } from "../types";
 import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
 import { getEffectivePlanType } from "../lib/accountPlan";
-import { invokeBackend } from "../lib/platform";
 import { AccountUsageStats } from "./AccountUsageStats";
 import { ResetCreditsMenu } from "./ResetCreditsMenu";
 import { UsageBar } from "./UsageBar";
-
-const RESET_CREDITS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 interface AccountCardProps {
   account: AccountWithUsage;
@@ -41,6 +38,11 @@ interface AccountCardProps {
   onToggleAutoWarmup?: () => void;
   warmupFailure?: WarmupFailureInfo;
   onDismissWarmupFailure?: () => void;
+  resetCredits?: AccountResetCredits | null;
+  onResetCreditsLoaded?: (
+    accountId: string,
+    resetCredits: AccountResetCredits | null,
+  ) => void;
   statsDefaultOpen?: boolean;
   compact?: boolean;
 }
@@ -223,6 +225,8 @@ export function AccountCard({
   onToggleAutoWarmup,
   warmupFailure,
   onDismissWarmupFailure,
+  resetCredits = null,
+  onResetCreditsLoaded,
   statsDefaultOpen,
   compact = false,
 }: AccountCardProps) {
@@ -234,10 +238,8 @@ export function AccountCard({
   const lastRefresh = account.usageUpdatedAt ? new Date(account.usageUpdatedAt) : null;
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(account.name);
-  const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const managementMenuRef = useRef<HTMLDetailsElement>(null);
-  const resetRequestSeq = useRef(0);
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -343,51 +345,14 @@ export function AccountCard({
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at, t, locale);
   const compactResetCredits = !account.is_active;
 
-  const loadResetCredits = useCallback(async () => {
-    const requestId = ++resetRequestSeq.current;
-
-    if (account.auth_mode !== "chat_g_p_t" || account.disabled) {
-      setResetCredits(null);
-      return;
-    }
-
-    try {
-      const stats = await invokeBackend<AccountUsageStatsInfo>("get_account_usage_stats", {
-        accountId: account.id,
-      });
-      if (requestId !== resetRequestSeq.current) return;
-      setResetCredits(stats.account_id === account.id ? stats.reset_credits : null);
-    } catch {
-      if (requestId !== resetRequestSeq.current) return;
-      setResetCredits(null);
-    }
-  }, [account.auth_mode, account.disabled, account.id]);
-
   const handleStatsLoaded = useCallback(
     (stats: AccountUsageStatsInfo | null) => {
-      setResetCredits(stats?.account_id === account.id ? stats.reset_credits : null);
+      if (stats?.account_id === account.id) {
+        onResetCreditsLoaded?.(account.id, stats.reset_credits);
+      }
     },
-    [account.id]
+    [account.id, onResetCreditsLoaded]
   );
-
-  useEffect(() => {
-    setResetCredits(null);
-
-    if (account.auth_mode !== "chat_g_p_t" || account.disabled) {
-      resetRequestSeq.current += 1;
-      return;
-    }
-
-    void loadResetCredits();
-    const timer = window.setInterval(() => {
-      void loadResetCredits();
-    }, RESET_CREDITS_REFRESH_INTERVAL_MS);
-
-    return () => {
-      resetRequestSeq.current += 1;
-      window.clearInterval(timer);
-    };
-  }, [loadResetCredits]);
 
 
   return (
@@ -496,8 +461,8 @@ export function AccountCard({
             </span>
           )}
           <ResetCreditsMenu
-            compact={compactResetCredits}
-            resetCredits={resetCredits}
+            variant={compactResetCredits ? "compact" : "card"}
+            resetCredits={account.disabled ? null : resetCredits}
           />
         </div>
       </div>
