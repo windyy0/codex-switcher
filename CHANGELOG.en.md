@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.5] - 2026-08-22
+
 ### Added
 
 - Added manual reset-credit information to list view, showing the available count and nearest expiry before subscription expiry; hover or keyboard focus reveals per-credit details.
