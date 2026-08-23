@@ -15,6 +15,8 @@ pub mod taskbar_widget;
 pub mod tray;
 pub mod types;
 pub mod web;
+#[cfg(target_os = "windows")]
+pub mod windows_taskbar;
 
 #[cfg(target_os = "macos")]
 use tauri::Emitter;
@@ -34,12 +36,19 @@ use commands::{
 };
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    let quit_on_start = windows_taskbar::is_quit_request(std::env::args());
     let mut builder = tauri::Builder::default();
     #[cfg(desktop)]
     {
         // Must be registered before every other plugin so a second desktop
         // process cannot race the account/config transaction files.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            #[cfg(target_os = "windows")]
+            if windows_taskbar::is_quit_request(_args) {
+                app.exit(0);
+                return;
+            }
             commands::restore_main_window(app);
         }));
         builder = builder.plugin(
@@ -59,7 +68,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            if quit_on_start {
+                app.handle().exit(0);
+                return Ok(());
+            }
             {
                 let _transition_guard =
                     commands::lock_account_transition().map_err(std::io::Error::other)?;
@@ -72,7 +86,10 @@ pub fn run() {
                 tray::setup(app.handle())?;
                 floating::setup(app.handle())?;
                 #[cfg(target_os = "windows")]
-                taskbar_widget::setup(app.handle());
+                {
+                    taskbar_widget::setup(app.handle());
+                    windows_taskbar::setup();
+                }
             }
             Ok(())
         })

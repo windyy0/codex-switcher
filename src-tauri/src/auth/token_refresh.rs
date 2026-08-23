@@ -12,12 +12,12 @@ use std::{
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::{
-    finalize_account_auth_sync, get_codex_home_identity, load_accounts,
-    lock_credential_exchange_async, remember_consumed_refresh_token, save_accounts,
-    sync_account_auth_file_at_home,
+    finalize_account_auth_sync, get_codex_home_identity, has_consumed_refresh_token, load_accounts,
+    lock_credential_exchange_async, read_current_auth, remember_consumed_refresh_token,
+    save_accounts, sync_account_auth_file_at_home,
 };
 use crate::commands::account::lock_account_transition;
-use crate::types::{parse_chatgpt_id_token_claims, AuthData, StoredAccount};
+use crate::types::{parse_chatgpt_id_token_claims, AuthData, StoredAccount, TokenData};
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -33,6 +33,13 @@ static IMPORT_REFRESH_SLOTS: LazyLock<
     Mutex<HashMap<[u8; 32], Arc<AsyncMutex<Option<RefreshTokenResponse>>>>>,
 > = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthFileTokenMerge {
+    Unchanged,
+    Updated,
+    IdentityMismatch,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RefreshTokenResponse {
     #[serde(default)]
@@ -40,6 +47,147 @@ struct RefreshTokenResponse {
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
+}
+
+/// Import credentials that the active Codex client rotated in auth.json.
+///
+/// The account store is canonical for inactive accounts, but auth.json is a
+/// live credential cache for the active account and Codex may refresh it while
+/// Switcher is not involved. Reconcile that one account before authenticated
+/// requests so Switcher never consumes the stale pre-rotation token again.
+pub async fn sync_active_account_from_codex_auth(
+    account_id: &str,
+) -> Result<Option<StoredAccount>> {
+    // Avoid serializing every inactive-account usage request behind the global
+    // credential lock. The active account is checked again after locking.
+    if load_accounts()?.active_account_id.as_deref() != Some(account_id) {
+        return Ok(None);
+    }
+
+    let _credential_exchange = lock_credential_exchange_async().await?;
+    let _transition_guard = lock_account_transition().map_err(anyhow::Error::msg)?;
+    let mut store = load_accounts()?;
+    if store.active_account_id.as_deref() != Some(account_id) {
+        return Ok(None);
+    }
+
+    let current_home = get_codex_home_identity()?;
+    if store
+        .active_account_home
+        .as_deref()
+        .is_some_and(|active_home| active_home != current_home)
+    {
+        return Ok(None);
+    }
+
+    let Some(auth) = read_current_auth()? else {
+        return Ok(None);
+    };
+    let Some(tokens) = auth.tokens else {
+        return Ok(None);
+    };
+
+    // Never restore a refresh token that Switcher already knows was consumed.
+    if has_consumed_refresh_token(&store, &tokens.refresh_token) {
+        return Ok(None);
+    }
+
+    let account_index = store
+        .accounts
+        .iter()
+        .position(|candidate| candidate.id == account_id)
+        .context("Active account not found while synchronizing auth.json")?;
+    let mut updated = store.accounts[account_index].clone();
+    let previous_refresh_token = match &updated.auth_data {
+        AuthData::ChatGPT { refresh_token, .. } => refresh_token.clone(),
+        AuthData::ApiKey { .. } => return Ok(None),
+    };
+
+    match merge_auth_file_tokens(&mut updated, tokens) {
+        AuthFileTokenMerge::Unchanged => Ok(None),
+        AuthFileTokenMerge::IdentityMismatch => {
+            eprintln!(
+                "[Auth] Refused to import auth.json credentials for a different active account"
+            );
+            Ok(None)
+        }
+        AuthFileTokenMerge::Updated => {
+            store.accounts[account_index] = updated.clone();
+            store.active_account_home = Some(current_home);
+            let (_, next_refresh_token) = account_tokens(&updated)?;
+            if previous_refresh_token != next_refresh_token && !previous_refresh_token.is_empty() {
+                remember_consumed_refresh_token(&mut store, &previous_refresh_token);
+            }
+            save_accounts(&store)?;
+            println!(
+                "[Auth] Synchronized externally refreshed credentials for account {}",
+                updated.name
+            );
+            Ok(Some(updated))
+        }
+    }
+}
+
+fn merge_auth_file_tokens(account: &mut StoredAccount, tokens: TokenData) -> AuthFileTokenMerge {
+    let AuthData::ChatGPT {
+        id_token: stored_id_token,
+        access_token: stored_access_token,
+        refresh_token: stored_refresh_token,
+        account_id: stored_account_id,
+    } = &account.auth_data
+    else {
+        return AuthFileTokenMerge::IdentityMismatch;
+    };
+
+    let stored_claims = parse_chatgpt_id_token_claims(stored_id_token);
+    let incoming_claims = parse_chatgpt_id_token_claims(&tokens.id_token);
+    let stored_identity = stored_claims
+        .account_id
+        .clone()
+        .or_else(|| stored_account_id.clone());
+    let incoming_identity = incoming_claims
+        .account_id
+        .clone()
+        .or_else(|| tokens.account_id.clone());
+    let same_identity = match (stored_identity.as_deref(), incoming_identity.as_deref()) {
+        (Some(stored), Some(incoming)) => stored == incoming,
+        _ => {
+            let stored_email = stored_claims.email.as_deref().or(account.email.as_deref());
+            match (stored_email, incoming_claims.email.as_deref()) {
+                (Some(stored), Some(incoming)) => stored.eq_ignore_ascii_case(incoming),
+                _ => stored_id_token == &tokens.id_token,
+            }
+        }
+    };
+    if !same_identity {
+        return AuthFileTokenMerge::IdentityMismatch;
+    }
+
+    let next_account_id = incoming_identity.or_else(|| stored_account_id.clone());
+    if stored_id_token == &tokens.id_token
+        && stored_access_token == &tokens.access_token
+        && stored_refresh_token == &tokens.refresh_token
+        && stored_account_id == &next_account_id
+    {
+        return AuthFileTokenMerge::Unchanged;
+    }
+
+    account.auth_data = AuthData::ChatGPT {
+        id_token: tokens.id_token,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        account_id: next_account_id,
+    };
+    if let Some(email) = incoming_claims.email {
+        account.email = Some(email);
+    }
+    if let Some(plan_type) = incoming_claims.plan_type {
+        account.plan_type = Some(plan_type);
+    }
+    if let Some(subscription_expires_at) = incoming_claims.subscription_expires_at {
+        account.subscription_expires_at = Some(subscription_expires_at);
+    }
+    AuthFileTokenMerge::Updated
 }
 
 /// Ensure the account has a non-expired ChatGPT access token.
@@ -369,9 +517,27 @@ async fn refresh_tokens_with_refresh_token(refresh_token: &str) -> Result<Refres
 
 #[cfg(test)]
 mod tests {
-    use super::{account_refresh_lock, apply_refresh_response, RefreshTokenResponse};
-    use crate::types::{AuthData, StoredAccount};
+    use super::{
+        account_refresh_lock, apply_refresh_response, merge_auth_file_tokens, AuthFileTokenMerge,
+        RefreshTokenResponse,
+    };
+    use crate::types::{AuthData, StoredAccount, TokenData};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use std::sync::Arc;
+
+    fn id_token(account_id: &str, email: &str, plan_type: &str) -> String {
+        let payload = serde_json::json!({
+            "email": email,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": account_id,
+                "chatgpt_plan_type": plan_type,
+            }
+        });
+        format!(
+            "header.{}.signature",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload should serialize"))
+        )
+    }
 
     #[test]
     fn refresh_locks_are_shared_per_account_only() {
@@ -418,5 +584,84 @@ mod tests {
         assert_eq!(access_token, "new-access");
         assert_eq!(refresh_token, "old-refresh");
         assert_eq!(account_id.as_deref(), Some("old-account"));
+    }
+
+    #[test]
+    fn active_auth_merge_imports_rotated_tokens_for_the_same_account() {
+        let mut account = StoredAccount::new_chatgpt(
+            "ChatGPT".into(),
+            Some("person@example.com".into()),
+            Some("plus".into()),
+            None,
+            id_token("account-a", "person@example.com", "plus"),
+            "old-access".into(),
+            "old-refresh".into(),
+            Some("account-a".into()),
+        );
+
+        let result = merge_auth_file_tokens(
+            &mut account,
+            TokenData {
+                id_token: id_token("account-a", "person@example.com", "pro"),
+                access_token: "new-access".into(),
+                refresh_token: "new-refresh".into(),
+                account_id: Some("account-a".into()),
+            },
+        );
+
+        assert_eq!(result, AuthFileTokenMerge::Updated);
+        assert_eq!(account.plan_type.as_deref(), Some("pro"));
+        let AuthData::ChatGPT {
+            access_token,
+            refresh_token,
+            account_id,
+            ..
+        } = account.auth_data
+        else {
+            panic!("expected ChatGPT account")
+        };
+        assert_eq!(access_token, "new-access");
+        assert_eq!(refresh_token, "new-refresh");
+        assert_eq!(account_id.as_deref(), Some("account-a"));
+    }
+
+    #[test]
+    fn active_auth_merge_rejects_credentials_for_a_different_account() {
+        let original_id_token = id_token("account-a", "first@example.com", "plus");
+        let mut account = StoredAccount::new_chatgpt(
+            "ChatGPT".into(),
+            Some("first@example.com".into()),
+            Some("plus".into()),
+            None,
+            original_id_token.clone(),
+            "old-access".into(),
+            "old-refresh".into(),
+            Some("account-a".into()),
+        );
+
+        let result = merge_auth_file_tokens(
+            &mut account,
+            TokenData {
+                id_token: id_token("account-b", "second@example.com", "pro"),
+                access_token: "other-access".into(),
+                refresh_token: "other-refresh".into(),
+                account_id: Some("account-b".into()),
+            },
+        );
+
+        assert_eq!(result, AuthFileTokenMerge::IdentityMismatch);
+        let AuthData::ChatGPT {
+            id_token,
+            access_token,
+            refresh_token,
+            account_id,
+        } = account.auth_data
+        else {
+            panic!("expected ChatGPT account")
+        };
+        assert_eq!(id_token, original_id_token);
+        assert_eq!(access_token, "old-access");
+        assert_eq!(refresh_token, "old-refresh");
+        assert_eq!(account_id.as_deref(), Some("account-a"));
     }
 }

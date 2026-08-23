@@ -2419,7 +2419,6 @@ function App() {
                   isRefreshing ||
                   !accounts.some(
                     (account) => account.auth_mode === "chat_g_p_t" && !account.disabled
-                      && !accountHealthBlocksAccountActions(account)
                   )
                 }
                 className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"

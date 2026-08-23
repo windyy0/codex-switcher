@@ -129,6 +129,12 @@ export function useAccounts() {
           return;
         }
 
+        // A manual refresh is also a recovery attempt. Accounts previously
+        // marked for reauthorization must still reach metadata and usage so a
+        // newly synchronized auth.json or a still-valid access token can clear
+        // stale health state. Background polling continues to skip them.
+        const retryBlockedAccounts = Boolean(options?.refreshMetadata);
+
         // API key providers do not expose the ChatGPT subscription/rate-limit
         // endpoints. Keep them out of both metadata and usage polling instead
         // of manufacturing a recurring "usage unavailable" failure.
@@ -136,14 +142,14 @@ export function useAccounts() {
           (account) =>
             account.auth_mode === "chat_g_p_t" &&
             !account.disabled &&
-            !accountHealthBlocksAccountActions(account)
+            (retryBlockedAccounts || !accountHealthBlocksAccountActions(account))
         );
 
         setAccounts((prev) =>
           prev.map((account) =>
             account.auth_mode === "api_key" ||
               account.disabled ||
-              accountHealthBlocksAccountActions(account)
+              (!retryBlockedAccounts && accountHealthBlocksAccountActions(account))
               ? { ...account, usage: undefined, usageLoading: false, usageUpdatedAt: undefined }
               : account
           )
@@ -162,13 +168,6 @@ export function useAccounts() {
               });
             },
             maxConcurrentUsageRequests
-          );
-
-          list = (await loadAccounts(true)).filter(
-            (account) =>
-              account.auth_mode === "chat_g_p_t" &&
-              !account.disabled &&
-              !accountHealthBlocksAccountActions(account)
           );
         }
 
@@ -252,7 +251,6 @@ export function useAccounts() {
       if (options?.refreshMetadata) {
         try {
           await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
-          await loadAccounts(true);
         } catch (err) {
           // Subscription metadata is supplemental to the usage display. Keep the
           // per-account refresh usable when this backend endpoint is unavailable.

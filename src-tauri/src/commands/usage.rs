@@ -5,8 +5,8 @@ use crate::api::usage::{
     fetch_chatgpt_account_metadata, get_account_usage, warmup_account as send_warmup,
 };
 use crate::auth::{
-    get_account, load_accounts, record_account_health, refresh_chatgpt_tokens,
-    update_account_metadata,
+    ensure_chatgpt_tokens_fresh, get_account, load_accounts, record_account_health,
+    sync_active_account_from_codex_auth, update_account_metadata,
 };
 use crate::commands::account::lock_account_transition;
 use crate::types::{
@@ -43,6 +43,9 @@ pub fn clear_usage_cache(account_id: &str) {
 
 /// Fetch usage info for a specific account (shared by the Tauri command and web mode).
 pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
+    if let Err(error) = sync_active_account_from_codex_auth(account_id).await {
+        eprintln!("[Auth] Failed to synchronize active auth.json before usage: {error}");
+    }
     let account = get_account(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
@@ -173,11 +176,15 @@ pub async fn get_usage(
     Ok(usage)
 }
 
-/// Force-refresh account metadata for a specific account.
-/// For ChatGPT accounts this refreshes OAuth tokens and pulls live subscription metadata.
+/// Refresh account metadata for a specific account.
+/// For ChatGPT accounts this imports any externally rotated active credentials,
+/// refreshes only an expired access token, and pulls live subscription metadata.
 /// For API key accounts this is a no-op.
 #[tauri::command]
 pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo, String> {
+    if let Err(error) = sync_active_account_from_codex_auth(&account_id).await {
+        eprintln!("[Auth] Failed to synchronize active auth.json before metadata: {error}");
+    }
     let account = get_account(&account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
@@ -188,7 +195,7 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
     let updated = match &account.auth_data {
         AuthData::ApiKey { .. } => account,
         AuthData::ChatGPT { .. } => {
-            let refreshed = match refresh_chatgpt_tokens(&account).await {
+            let refreshed = match ensure_chatgpt_tokens_fresh(&account).await {
                 Ok(refreshed) => refreshed,
                 Err(error) => {
                     persist_health_observation(
@@ -251,9 +258,7 @@ pub async fn refresh_all_accounts_usage() -> Result<Vec<UsageInfo>, String> {
         .accounts
         .into_iter()
         .filter(|account| {
-            !account.disabled
-                && !account.health_blocks_account_actions()
-                && matches!(account.auth_data, AuthData::ChatGPT { .. })
+            !account.disabled && matches!(account.auth_data, AuthData::ChatGPT { .. })
         })
         .map(|account| account.id)
         .collect::<Vec<_>>();

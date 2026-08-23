@@ -6,6 +6,11 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Quit command in the Windows taskbar right-click menu not taking effect.
+- Fixed manual refresh briefly or persistently showing “Reauthorize” after Codex automatically rotates the current account token. Switcher now synchronizes the active `auth.json` and continues validating usage status during refresh-all.
+
 ## [0.107.5] - 2026-08-22
 
 ### Added
