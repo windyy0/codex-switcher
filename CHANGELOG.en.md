@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.6] - 2026-08-24
+
 ### Fixed
 
 - Fixed the Quit command in the Windows taskbar right-click menu not taking effect.
