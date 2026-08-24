@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.7] - 2026-08-24
+
 ### Improved
 
 - Settings → Updates now displays the current Codex Switcher version in a clearer compact status card.
