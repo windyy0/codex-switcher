@@ -71,6 +71,7 @@
     "field_secondary_usage": "周额度",
     "updateSection": "软件更新",
     "checkForUpdates": "检查更新",
+    "currentVersion": "当前版本：v{{version}}",
     "updateDescription": "从 GitHub Releases 检查 Codex Switcher 的新版本。",
     "checkNow": "立即检查"
   },

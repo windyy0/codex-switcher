@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { version as appVersion } from "../package.json";
 import { useAccounts } from "./hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
 import { useResetCredits } from "./hooks/useResetCredits";
@@ -2673,12 +2674,28 @@ function App() {
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                 {t("settings.updateSection")}
               </h3>
-              <div className="flex items-center justify-between gap-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                <div>
-                  <div className="font-semibold text-gray-900 dark:text-gray-100">{t("settings.checkForUpdates")}</div>
-                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("settings.updateDescription")}</p>
+              <div className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-start gap-3.5">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                    <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 11a8 8 0 0 0-14.7-4.4L4 9" />
+                      <path d="M4 4v5h5" />
+                      <path d="M4 13a8 8 0 0 0 14.7 4.4L20 15" />
+                      <path d="M20 20v-5h-5" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0 pt-0.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-gray-900 dark:text-gray-100">Codex Switcher</span>
+                      <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                        <span className="sr-only">{t("settings.currentVersion", { version: appVersion })}</span>
+                        <span aria-hidden="true">v{appVersion}</span>
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm leading-5 text-gray-500 dark:text-gray-400">{t("settings.updateDescription")}</p>
+                  </div>
                 </div>
-                <button type="button" onClick={requestUpdateCheck} className="h-10 shrink-0 rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white transition-colors hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200">
+                <button type="button" onClick={requestUpdateCheck} className="h-10 w-full shrink-0 rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white transition-colors hover:bg-gray-800 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200 sm:w-auto">
                   {t("settings.checkNow")}
                 </button>
               </div>
