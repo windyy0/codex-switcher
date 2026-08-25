@@ -6,6 +6,10 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Improved
+
+- Reordered usage limits in the account list so the 5-hour limit now appears above the weekly limit.
+
 ## [0.107.10] - 2026-08-25
 
 ### Improved

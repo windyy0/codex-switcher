@@ -87,7 +87,13 @@ function QuotaLine({
   );
 }
 
-function AccountQuota({ account }: { account: AccountWithUsage }) {
+function AccountQuota({
+  account,
+  sessionFirst = false,
+}: {
+  account: AccountWithUsage;
+  sessionFirst?: boolean;
+}) {
   const { t } = useTranslation();
   const isDeactivated =
     account.health?.status === "account_deactivated" ||
@@ -168,22 +174,25 @@ function AccountQuota({ account }: { account: AccountWithUsage }) {
     );
   }
 
+  const sessionQuota = hasSession ? (
+    <QuotaLine
+      label={isMonthlyWindow(account.usage.primary_window_minutes) ? t("usage.monthly") : t("usage.fiveHour")}
+      usedPercent={account.usage.primary_used_percent}
+      resetsAt={account.usage.primary_resets_at}
+    />
+  ) : null;
+  const weeklyQuota = hasWeekly ? (
+    <QuotaLine
+      label={t("usage.weekly")}
+      usedPercent={account.usage.secondary_used_percent}
+      resetsAt={account.usage.secondary_resets_at}
+    />
+  ) : null;
+
   return (
     <div className="space-y-1.5">
-      {hasWeekly && (
-        <QuotaLine
-          label={t("usage.weekly")}
-          usedPercent={account.usage.secondary_used_percent}
-          resetsAt={account.usage.secondary_resets_at}
-        />
-      )}
-      {hasSession && (
-        <QuotaLine
-          label={isMonthlyWindow(account.usage.primary_window_minutes) ? t("usage.monthly") : t("usage.fiveHour")}
-          usedPercent={account.usage.primary_used_percent}
-          resetsAt={account.usage.primary_resets_at}
-        />
-      )}
+      {sessionFirst ? sessionQuota : weeklyQuota}
+      {sessionFirst ? weeklyQuota : sessionQuota}
     </div>
   );
 }
@@ -350,7 +359,7 @@ export function AccountRow({
           : "h-full w-full max-w-md justify-self-center"
         } min-w-0 text-left outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-emerald-500`}
       >
-        <AccountQuota account={account} />
+        <AccountQuota account={account} sessionFirst={!isCardLayout} />
       </button>
 
       {hasResetCredits && (
