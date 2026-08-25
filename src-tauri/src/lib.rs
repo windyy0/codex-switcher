@@ -23,16 +23,16 @@ use tauri::Emitter;
 
 use commands::{
     ack_close_behavior_prompt, add_account_from_file, add_api_account, cancel_login,
-    check_codex_processes, complete_close_behavior, complete_login, delete_account,
-    detect_local_auth_json, export_accounts_full_encrypted_file, export_accounts_slim_text,
-    get_account_usage_stats, get_active_account_info, get_api_account_config, get_app_language,
-    get_app_settings, get_dock_display_mode, get_masked_account_ids, get_usage,
-    import_accounts_full_encrypted_file, import_accounts_slim_text, kill_codex_processes,
-    list_accounts, open_main_window, refresh_account_metadata, refresh_all_accounts_usage,
-    rename_account, report_account_deactivation_email, report_oauth_page_error, report_usage,
-    set_account_disabled, set_api_account_config, set_app_language, set_app_settings,
-    set_dock_display_mode, set_masked_account_ids, start_login, switch_account, warmup_account,
-    warmup_all_accounts,
+    check_codex_processes, close_main_window, complete_close_behavior, complete_login,
+    delete_account, detect_local_auth_json, export_accounts_full_encrypted_file,
+    export_accounts_slim_text, get_account_usage_stats, get_active_account_info,
+    get_api_account_config, get_app_language, get_app_settings, get_dock_display_mode,
+    get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
+    import_accounts_slim_text, kill_codex_processes, list_accounts, open_main_window,
+    refresh_account_metadata, refresh_all_accounts_usage, rename_account,
+    report_account_deactivation_email, report_oauth_page_error, report_usage, set_account_disabled,
+    set_api_account_config, set_app_language, set_app_settings, set_dock_display_mode,
+    set_masked_account_ids, start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -154,6 +154,7 @@ pub fn run() {
             kill_codex_processes,
             // Tray integration
             open_main_window,
+            close_main_window,
             report_usage,
             tray::take_pending_tray_switch_request,
             tray::switch_account_from_tray,

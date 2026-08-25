@@ -39,14 +39,28 @@ pub fn open_main_window(app: AppHandle) {
     restore_main_window(&app);
 }
 
-pub fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
-        if let Err(error) = window.hide() {
-            eprintln!("Failed to hide main window: {error}");
-        }
-    }
+#[tauri::command]
+pub fn close_main_window(app: AppHandle) -> Result<(), String> {
+    try_hide_main_window(&app)
+}
+
+fn try_hide_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is not available".to_string())?;
+    window
+        .hide()
+        .map_err(|error| format!("failed to hide main window: {error}"))?;
     #[cfg(target_os = "macos")]
-    let _ = app.hide();
+    app.hide()
+        .map_err(|error| format!("failed to hide application: {error}"))?;
+    Ok(())
+}
+
+pub fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Err(error) = try_hide_main_window(app) {
+        eprintln!("Failed to hide main window: {error}");
+    }
 }
 
 /// Hide after the current native close callback has returned.
