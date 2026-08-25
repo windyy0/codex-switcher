@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.10] - 2026-08-25
+
 ### Improved
 
 - Simplified the Settings → Updates card by removing the decorative icon before the update details, and added clearer hover, pressed, and keyboard-focus feedback to the Update now button.
