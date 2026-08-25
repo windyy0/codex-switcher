@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.107.9] - 2026-08-25
+
 ### Fixed
 
 - Fixed the main-window close button doing nothing on Windows in 0.107.8 because direct window hiding lacked permission; the button now uses the backend window lifecycle command, with a visibility regression test.
