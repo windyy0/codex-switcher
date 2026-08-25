@@ -6,6 +6,10 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Windows taskbar icon's right-click Open and Quit commands becoming unresponsive after the main window was closed; close no longer re-enters the native callback synchronously, single-instance commands are deferred to the main event loop, and Open recreates a missing main window.
+
 ## [0.107.7] - 2026-08-24
 
 ### Improved

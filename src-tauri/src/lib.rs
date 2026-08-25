@@ -45,10 +45,11 @@ pub fn run() {
         // process cannot race the account/config transaction files.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             #[cfg(target_os = "windows")]
-            if windows_taskbar::is_quit_request(_args) {
-                app.exit(0);
+            {
+                windows_taskbar::handle_forwarded_launch(app, _args);
                 return;
             }
+            #[cfg(not(target_os = "windows"))]
             commands::restore_main_window(app);
         }));
         builder = builder.plugin(
@@ -110,7 +111,7 @@ pub fn run() {
                             window.emit(commands::window::CLOSE_BEHAVIOR_REQUESTED_EVENT, payload);
                         return;
                     }
-                    commands::hide_main_window(&tauri::Manager::app_handle(window));
+                    commands::schedule_hide_main_window(tauri::Manager::app_handle(window).clone());
                 }
             }
         })

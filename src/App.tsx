@@ -2138,7 +2138,7 @@ function App() {
       </button>
       <button
         onClick={() => {
-          void appWindow.close();
+          void appWindow.hide();
         }}
         className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-500 hover:text-white dark:text-gray-400 dark:hover:bg-red-500 dark:hover:text-white"
         data-tooltip={t("window.close")}

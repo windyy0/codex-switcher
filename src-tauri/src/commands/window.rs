@@ -41,10 +41,35 @@ pub fn open_main_window(app: AppHandle) {
 
 pub fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+        if let Err(error) = window.hide() {
+            eprintln!("Failed to hide main window: {error}");
+        }
     }
     #[cfg(target_os = "macos")]
     let _ = app.hide();
+}
+
+/// Hide after the current native close callback has returned.
+///
+/// On Windows, changing visibility synchronously inside `CloseRequested` is
+/// re-entrant in the wry event loop and can still destroy the native window
+/// after `prevent_close()`. Sending the visibility change from a worker queues
+/// it for the next event-loop turn.
+pub fn schedule_hide_main_window<R: Runtime>(app: AppHandle<R>) {
+    let app_handle = app.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("main-window-hide-dispatch".into())
+        .spawn(move || {
+            let hide_app = app_handle.clone();
+            if let Err(error) = app_handle.run_on_main_thread(move || {
+                hide_main_window(&hide_app);
+            }) {
+                eprintln!("Failed to schedule main window hide: {error}");
+            }
+        })
+    {
+        eprintln!("Failed to start main window hide dispatcher: {error}");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -75,10 +100,35 @@ pub fn schedule_close_behavior_prompt_fallback<R: Runtime>(app: AppHandle<R>, re
 pub fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "macos")]
     let _ = app.show();
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+    let window = app.get_webview_window("main").or_else(|| {
+        let config = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|config| config.label == "main")?;
+        match tauri::WebviewWindowBuilder::from_config(app, config)
+            .and_then(|builder| builder.build())
+        {
+            Ok(window) => Some(window),
+            Err(error) => {
+                eprintln!("Failed to recreate main window: {error}");
+                None
+            }
+        }
+    });
+    let Some(window) = window else {
+        eprintln!("Failed to restore main window: no main window configuration");
+        return;
+    };
+    if let Err(error) = window.show() {
+        eprintln!("Failed to show main window: {error}");
+    }
+    if let Err(error) = window.unminimize() {
+        eprintln!("Failed to unminimize main window: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        eprintln!("Failed to focus main window: {error}");
     }
 }
 

@@ -3,6 +3,8 @@
 
 use std::thread;
 
+use tauri::{AppHandle, Runtime};
+
 use windows::{
     core::{Interface, PCWSTR, PROPVARIANT},
     Win32::{
@@ -36,6 +38,37 @@ where
 {
     args.into_iter()
         .any(|argument| argument.as_ref() == QUIT_ARGUMENT)
+}
+
+/// Handle a launch forwarded by the single-instance plugin.
+///
+/// On Windows the plugin invokes its callback synchronously from the hidden
+/// `WM_COPYDATA` receiver window. Showing another window or exiting the app
+/// from inside that window procedure is re-entrant: the call can appear to
+/// succeed while the requested window state is never applied, and exiting can
+/// tear down the receiver before the callback returns. Dispatch from a worker
+/// so the action is queued for the next event-loop turn, after `WM_COPYDATA`
+/// has completed.
+pub fn handle_forwarded_launch<R: Runtime>(app: &AppHandle<R>, args: Vec<String>) {
+    let should_quit = is_quit_request(&args);
+    let app_handle = app.clone();
+    if let Err(error) = thread::Builder::new()
+        .name("taskbar-launch-dispatch".into())
+        .spawn(move || {
+            let action_app = app_handle.clone();
+            if let Err(error) = app_handle.run_on_main_thread(move || {
+                if should_quit {
+                    action_app.exit(0);
+                } else {
+                    crate::commands::restore_main_window(&action_app);
+                }
+            }) {
+                eprintln!("Failed to dispatch the taskbar command: {error}");
+            }
+        })
+    {
+        eprintln!("Failed to start the taskbar command dispatcher: {error}");
+    }
 }
 
 /// Add an explicit quit command to the taskbar jump list. Windows' built-in
