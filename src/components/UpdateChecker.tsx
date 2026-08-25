@@ -262,8 +262,9 @@ export function UpdateChecker() {
                   {t("updates.ignoreVersion")}
                 </button>
                 <button
+                  type="button"
                   onClick={handleDownloadAndInstall}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
+                  className="cursor-pointer select-none rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:bg-gray-700 hover:shadow-md active:translate-y-0 active:scale-[0.96] active:bg-black active:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 focus-visible:ring-offset-2 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white dark:active:bg-gray-300 dark:focus-visible:ring-gray-400 dark:focus-visible:ring-offset-gray-900"
                 >
                   {t("updates.update")}
                 </button>
