@@ -2,7 +2,6 @@
 
 use std::process::Command;
 
-#[cfg(any(windows, test))]
 use anyhow::Context;
 
 #[cfg(unix)]
@@ -135,6 +134,63 @@ pub(crate) fn ensure_codex_not_running() -> Result<(), String> {
         pids.len(),
         if pids.len() == 1 { " is" } else { "es are" }
     ))
+}
+
+pub(crate) fn codex_is_running() -> Result<bool, String> {
+    codex_credential_process_is_running().map_err(|error| error.to_string())
+}
+
+/// Credential ownership is broader than the set of desktop roots we offer to
+/// force-close. Include CLI/IDE/headless backends without adding them to that UI.
+fn codex_credential_process_is_running() -> anyhow::Result<bool> {
+    #[cfg(test)]
+    if let Some(running) = crate::auth::test_support::codex_running() {
+        return running;
+    }
+    #[cfg(windows)]
+    {
+        return Ok(read_windows_process_snapshot()?.iter().any(|process| {
+            process.process_id != std::process::id()
+                && windows_process_uses_codex_credentials(process)
+        }));
+    }
+    #[cfg(unix)]
+    {
+        let output = Command::new("ps")
+            .args(["-axo", "pid=,comm="])
+            .output()
+            .context("Failed to inspect Codex credential processes")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "Failed to inspect Codex credential processes"
+        );
+        let backend_running = String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            let mut parts = line.trim().splitn(2, char::is_whitespace);
+            let pid = parts.next().and_then(|pid| pid.parse::<u32>().ok());
+            pid != Some(std::process::id())
+                && parts
+                    .next()
+                    .is_some_and(unix_executable_uses_codex_credentials)
+        });
+        return Ok(backend_running || !find_codex_processes()?.0.is_empty());
+    }
+    #[allow(unreachable_code)]
+    Ok(false)
+}
+
+#[cfg(any(windows, test))]
+fn windows_process_uses_codex_credentials(process: &WindowsProcessEntry) -> bool {
+    !normalize_windows_path(&process.executable_path).contains("codex-switcher")
+        && (process.name.eq_ignore_ascii_case("codex.exe") || process.trusted_desktop_executable)
+}
+
+#[cfg(any(unix, test))]
+fn unix_executable_uses_codex_credentials(executable: &str) -> bool {
+    executable
+        .trim()
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("codex"))
 }
 
 pub(crate) fn is_codex_running_switch_block(error: &str) -> bool {
@@ -405,6 +461,10 @@ fn process_exists(pid: u32) -> bool {
 
 /// Find all running codex processes. Returns (active_pids, background_count)
 fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
+    #[cfg(test)]
+    if let Some(running) = crate::auth::test_support::codex_running() {
+        return running.map(|running| (if running { vec![1] } else { vec![] }, 0));
+    }
     #[cfg(unix)]
     {
         let mut pids = Vec::new();
@@ -993,6 +1053,44 @@ mod tests {
             trusted_desktop_executable,
             has_visible_window,
             started_recently: false,
+        }
+    }
+
+    #[test]
+    fn credential_detection_includes_cli_ide_and_headless_backends_without_force_close() {
+        for path in [
+            r"C:\tools\codex.exe",
+            r"C:\Users\test\.vscode\extensions\openai.chatgpt\bin\codex.exe",
+            r"C:\Users\test\.antigravity\extensions\bin\codex.exe",
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
+        ] {
+            let backend = windows_process("codex.exe", 123, 1, path, false);
+            assert!(super::windows_process_uses_codex_credentials(&backend));
+            assert!(classify_windows_codex_processes(&[backend]).0.is_empty());
+        }
+        assert!(!super::windows_process_uses_codex_credentials(
+            &windows_process(
+                "codex-switcher.exe",
+                123,
+                1,
+                r"C:\tools\codex-switcher.exe",
+                true
+            )
+        ));
+        for path in [
+            "codex",
+            "/usr/local/bin/codex",
+            "/home/user/.vscode/extensions/openai.chatgpt/bin/codex",
+            "/Applications/Codex.app/Contents/Resources/codex",
+        ] {
+            assert!(super::unix_executable_uses_codex_credentials(path));
+        }
+        for path in [
+            "codex-switcher",
+            "/usr/bin/node",
+            "/Applications/Codex Helper.app/Contents/MacOS/Codex Helper",
+        ] {
+            assert!(!super::unix_executable_uses_codex_credentials(path));
         }
     }
 

@@ -67,6 +67,10 @@ pub(crate) fn merge_consumed_refresh_token_hashes(
 
 /// Get the path to the codex-switcher config directory
 pub fn get_config_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = super::test_support::config_dir() {
+        return Ok(path);
+    }
     let home = dirs::home_dir().context("Could not find home directory")?;
     Ok(home.join(".codex-switcher"))
 }
@@ -166,7 +170,11 @@ pub fn save_accounts(store: &AccountsStore) -> Result<()> {
 /// desktop/web processes. The lock file itself is never replaced or removed.
 pub fn lock_credential_exchange() -> Result<fs::File> {
     let config_dir = get_config_dir()?;
-    fs::create_dir_all(&config_dir)?;
+    lock_credential_exchange_at(&config_dir)
+}
+
+fn lock_credential_exchange_at(config_dir: &Path) -> Result<fs::File> {
+    fs::create_dir_all(config_dir)?;
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -178,7 +186,8 @@ pub fn lock_credential_exchange() -> Result<fs::File> {
 }
 
 pub async fn lock_credential_exchange_async() -> Result<fs::File> {
-    tokio::task::spawn_blocking(lock_credential_exchange)
+    let config_dir = get_config_dir()?;
+    tokio::task::spawn_blocking(move || lock_credential_exchange_at(&config_dir))
         .await
         .context("Credential lock task failed")?
 }

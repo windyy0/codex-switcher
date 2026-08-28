@@ -461,7 +461,7 @@ pub enum AuthMode {
 }
 
 /// Authentication data (credentials)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthData {
     /// API key authentication

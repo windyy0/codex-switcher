@@ -6,8 +6,13 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Improved
+
+- Unified the clock tooltip styling with separate sections for full local, OpenAI, and UTC date and time, including UTC offsets for the local and OpenAI time zones.
+
 ### Fixed
 
+- Hardened account switching: save the latest tokens using the actual account ID in auth.json and check both ID and access tokens before switching in. Independent refreshes, including Slim imports, respect running Codex desktop, CLI, and IDE sessions. Cross-CODEX_HOME switches are rejected, and crash recovery preserves newer live credentials. If a refresh response lacks a usable ID token, retain its rotated refresh token and stop the switch instead of restoring stale credentials.
 - Fixed all Windows tray menu actions becoming unresponsive after extended uptime. Quota refreshes now reuse native menu items instead of exhausting the 16-bit Windows command ID range, with regression coverage for 10,000 refreshes and native menu events.
 
 ## [0.107.11] - 2026-08-26

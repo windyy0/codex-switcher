@@ -1,15 +1,17 @@
 //! Account management Tauri commands
 
 use crate::auth::{
-    add_account, clear_codex_account_files_removing, create_chatgpt_account_from_refresh_token,
-    finalize_account_auth_sync, finalize_codex_transition, get_account, get_account_codex_config,
-    get_codex_home_identity, has_consumed_refresh_token, has_duplicate_chatgpt_credentials,
-    import_from_auth_json, import_from_auth_json_contents, load_accounts,
-    lock_credential_exchange_async, merge_consumed_refresh_token_hashes,
-    recover_pending_account_transition, remember_consumed_refresh_token, remove_account,
-    restore_codex_state, save_accounts, set_account_codex_config, snapshot_codex_state,
-    switch_to_account, switch_to_account_removing, sync_account_auth_file_at_home,
-    validate_codex_config, MAX_CONSUMED_REFRESH_TOKEN_HASHES,
+    account_auth_sync_home, add_account, auth_matches_account, chatgpt_tokens_need_refresh,
+    clear_codex_account_files_removing, create_chatgpt_account_from_refresh_token,
+    ensure_chatgpt_tokens_fresh_with_credential_lock, finalize_account_auth_sync,
+    finalize_codex_transition, get_account, get_account_codex_config, get_codex_home_identity,
+    has_consumed_refresh_token, has_duplicate_chatgpt_credentials, import_from_auth_json,
+    import_from_auth_json_contents, load_accounts, lock_credential_exchange_async,
+    merge_consumed_refresh_token_hashes, read_current_auth, recover_pending_account_transition,
+    remember_consumed_refresh_token, remove_account, restore_codex_state, save_accounts,
+    set_account_codex_config, snapshot_codex_state, switch_to_account, switch_to_account_removing,
+    sync_account_auth_file_at_home, sync_current_codex_auth_unlocked, validate_codex_config,
+    MAX_CONSUMED_REFRESH_TOKEN_HASHES,
 };
 use crate::types::{
     AccountInfo, AccountsStore, AuthData, AuthMode, ImportAccountsSummary, StoredAccount,
@@ -283,20 +285,28 @@ pub async fn add_api_account(
 /// Switch to a different account
 #[tauri::command]
 pub async fn switch_account(account_id: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || switch_account_by_id(&account_id))
-        .await
-        .map_err(|error| format!("Account switch task failed: {error}"))?
+    switch_account_by_id(&account_id).await
 }
 
-pub fn switch_account_by_id(account_id: &str) -> Result<(), String> {
+pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
+    let _credential_exchange = lock_credential_exchange_async()
+        .await
+        .map_err(|e| e.to_string())?;
+    let account = {
+        let _guard = lock_account_transition()?;
+        prepare_account_switch_unlocked(account_id)?
+    };
+    // Persist any server rotation before taking the rollback snapshot. A
+    // failed switch must never restore a refresh token consumed by the server.
+    ensure_chatgpt_tokens_fresh_with_credential_lock(&account)
+        .await
+        .map_err(|e| e.to_string())?;
     let _guard = lock_account_transition()?;
     switch_account_by_id_unlocked(account_id)
 }
 
-pub(crate) fn switch_account_by_id_unlocked(account_id: &str) -> Result<(), String> {
+fn prepare_account_switch_unlocked(account_id: &str) -> Result<StoredAccount, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
-
-    // Find the account
     let account = store
         .accounts
         .iter()
@@ -309,7 +319,36 @@ pub(crate) fn switch_account_by_id_unlocked(account_id: &str) -> Result<(), Stri
     if account.health_blocks_account_actions() {
         return Err("Account authentication or availability requires attention".to_string());
     }
+    ensure_active_codex_home(&store)?;
     ensure_codex_not_running()?;
+    sync_current_codex_auth_unlocked().map_err(|e| e.to_string())?;
+    // The target may itself be active; use its reconciled credentials.
+    get_account(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Account not found: {account_id}"))
+}
+
+fn ensure_active_codex_home(store: &AccountsStore) -> Result<(), String> {
+    let home = get_codex_home_identity().map_err(|error| error.to_string())?;
+    if let Some(active_home) = store
+        .active_account_home
+        .as_deref()
+        .filter(|active_home| *active_home != home)
+    {
+        return Err(format!("The active account belongs to a different CODEX_HOME ({active_home}); use that home before switching"));
+    }
+    Ok(())
+}
+
+/// Caller owns both credential and transition locks. OAuth uses this after
+/// issuing fresh credentials; ordinary switches refresh before entering here.
+pub(crate) fn switch_account_by_id_unlocked(account_id: &str) -> Result<(), String> {
+    let account = prepare_account_switch_unlocked(account_id)?;
+    if chatgpt_tokens_need_refresh(&account) {
+        return Err(
+            "Account credentials are not fresh enough to switch; retry or sign in again".into(),
+        );
+    }
     let transition_snapshot = snapshot_codex_state().map_err(|e| e.to_string())?;
 
     // Write to ~/.codex/auth.json
@@ -347,41 +386,81 @@ pub async fn delete_account(account_id: String) -> Result<(), String> {
     let _credential_exchange = lock_credential_exchange_async()
         .await
         .map_err(|e| e.to_string())?;
+    let (replacement, expected_active_id) = {
+        let _guard = lock_account_transition()?;
+        let store = load_accounts().map_err(|e| e.to_string())?;
+        let deleted = store
+            .accounts
+            .iter()
+            .find(|account| account.id == account_id)
+            .cloned()
+            .ok_or_else(|| format!("Account not found: {account_id}"))?;
+
+        let live_is_deleted = read_current_auth()
+            .map_err(|e| e.to_string())?
+            .is_some_and(|auth| auth_matches_account(&auth, &deleted));
+        if store.active_account_id.as_deref() != Some(account_id.as_str()) && !live_is_deleted {
+            remove_account(&account_id).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        let current_home = get_codex_home_identity().map_err(|error| error.to_string())?;
+        if let Some(active_home) = store
+            .active_account_home
+            .as_deref()
+            .filter(|active_home| *active_home != current_home)
+        {
+            return Err(format!(
+                "The active account belongs to a different CODEX_HOME ({active_home})"
+            ));
+        }
+
+        ensure_codex_not_running()?;
+        sync_current_codex_auth_unlocked().map_err(|e| e.to_string())?;
+        (
+            store
+                .accounts
+                .iter()
+                .find(|account| {
+                    account.id != account_id
+                        && !account.disabled
+                        && !account.health_blocks_account_actions()
+                })
+                .cloned(),
+            store.active_account_id.clone(),
+        )
+    };
+    if let Some(account) = &replacement {
+        ensure_chatgpt_tokens_fresh_with_credential_lock(account)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     let _guard = lock_account_transition()?;
-    let store = load_accounts().map_err(|e| e.to_string())?;
-    let _deleted = store
-        .accounts
-        .iter()
-        .find(|account| account.id == account_id)
-        .cloned()
-        .ok_or_else(|| format!("Account not found: {account_id}"))?;
-
-    if store.active_account_id.as_deref() != Some(account_id.as_str()) {
-        remove_account(&account_id).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-    let current_home = get_codex_home_identity().map_err(|error| error.to_string())?;
-    if let Some(active_home) = store
-        .active_account_home
-        .as_deref()
-        .filter(|active_home| *active_home != current_home)
-    {
-        return Err(format!(
-            "The active account belongs to a different CODEX_HOME ({active_home})"
-        ));
-    }
-
     ensure_codex_not_running()?;
-    let transition_snapshot = snapshot_codex_state().map_err(|e| e.to_string())?;
-    let replacement = store
-        .accounts
-        .iter()
-        .find(|account| {
-            account.id != account_id
-                && !account.disabled
-                && !account.health_blocks_account_actions()
+    sync_current_codex_auth_unlocked().map_err(|e| e.to_string())?;
+    let store = load_accounts().map_err(|e| e.to_string())?;
+    if store.active_account_id != expected_active_id {
+        return Err("The active account changed while preparing deletion; retry".into());
+    }
+    let replacement = replacement
+        .map(|selected| -> Result<StoredAccount, String> {
+            let account = store
+                .accounts
+                .iter()
+                .find(|account| account.id == selected.id)
+                .cloned()
+                .ok_or_else(|| "Replacement account no longer exists".to_string())?;
+            if account.disabled
+                || account.health_blocks_account_actions()
+                || chatgpt_tokens_need_refresh(&account)
+            {
+                return Err(
+                    "Replacement account is not ready to switch; retry or sign in again".into(),
+                );
+            }
+            Ok(account)
         })
-        .cloned();
+        .transpose()?;
+    let transition_snapshot = snapshot_codex_state().map_err(|e| e.to_string())?;
     match &replacement {
         Some(account) => {
             switch_to_account_removing(account, &account_id).map_err(|e| e.to_string())?
@@ -540,6 +619,7 @@ pub async fn import_accounts_slim_text(payload: String) -> Result<ImportAccounts
         // this importer was waiting.
         {
             let _guard = lock_account_transition()?;
+            sync_current_codex_auth_unlocked().map_err(|e| e.to_string())?;
             let current = load_accounts().map_err(|e| e.to_string())?;
             if slim_entry_exists(&current, &entry) {
                 continue;
@@ -584,32 +664,13 @@ pub async fn import_accounts_slim_text(payload: String) -> Result<ImportAccounts
             existing.plan_type = account.plan_type;
             existing.subscription_expires_at = account.subscription_expires_at;
             let updated = existing.clone();
-            let is_active = current.active_account_id.as_deref() == Some(updated.id.as_str());
-            let active_home = if is_active {
-                Some(match &current.active_account_home {
-                    Some(home) => home.clone(),
-                    None => get_codex_home_identity().map_err(|error| error.to_string())?,
-                })
-            } else {
-                None
-            };
-            if let Some(active_home) = active_home.as_deref() {
-                current.active_account_home = Some(active_home.to_string());
-                current.pending_auth_sync_account_id = Some(updated.id.clone());
-                current.pending_auth_sync_home = Some(active_home.to_string());
-            }
             if source_was_rotated {
                 let source = source_refresh_token
                     .as_deref()
                     .expect("rotated ChatGPT source token should exist");
                 remember_consumed_refresh_token(&mut current, source);
             }
-            save_accounts(&current).map_err(|e| e.to_string())?;
-            if let Some(active_home) = active_home.as_deref() {
-                sync_account_auth_file_at_home(&updated, std::path::Path::new(active_home))
-                    .map_err(|e| e.to_string())?;
-                finalize_account_auth_sync(&updated.id, active_home).map_err(|e| e.to_string())?;
-            }
+            persist_imported_credentials(&mut current, &updated)?;
             continue;
         }
         let mut account = account;
@@ -635,8 +696,8 @@ pub async fn import_accounts_slim_text(payload: String) -> Result<ImportAccounts
                 .expect("rotated ChatGPT source token should exist");
             remember_consumed_refresh_token(&mut current, source);
         }
-        current.accounts.push(account);
-        save_accounts(&current).map_err(|e| e.to_string())?;
+        current.accounts.push(account.clone());
+        persist_imported_credentials(&mut current, &account)?;
         imported_count += 1;
         drop(credential_exchange);
     }
@@ -646,6 +707,29 @@ pub async fn import_accounts_slim_text(payload: String) -> Result<ImportAccounts
         imported_count,
         skipped_count: total_in_payload.saturating_sub(imported_count),
     })
+}
+
+fn persist_imported_credentials(
+    store: &mut AccountsStore,
+    account: &StoredAccount,
+) -> Result<(), String> {
+    // Inspection failure after server rotation must not discard the new token.
+    let home = if matches!(super::process::codex_is_running(), Ok(false)) {
+        account_auth_sync_home(store, account).unwrap_or(None)
+    } else {
+        None
+    };
+    if let Some(home) = &home {
+        store.pending_auth_sync_account_id = Some(account.id.clone());
+        store.pending_auth_sync_home = Some(home.clone());
+    }
+    save_accounts(store).map_err(|e| e.to_string())?;
+    if let Some(home) = home {
+        sync_account_auth_file_at_home(account, std::path::Path::new(&home))
+            .map_err(|e| e.to_string())?;
+        finalize_account_auth_sync(&account.id, &home).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Export full account config as an encrypted file.
@@ -712,6 +796,10 @@ pub async fn import_accounts_full_encrypted_bytes(
 
 /// Find all running Antigravity codex assistant processes
 fn restart_antigravity_if_running() {
+    #[cfg(test)]
+    if crate::auth::test_support::is_active() {
+        return;
+    }
     if let Ok(pids) = find_antigravity_processes() {
         for pid in pids {
             #[cfg(unix)]
@@ -1284,8 +1372,415 @@ mod api_switching_tests {
         slim_entry_exists, validate_imported_store, SlimAccountPayload, SlimPayload,
         FULL_FILE_VERSION, FULL_PRESET_PASSPHRASE, SLIM_AUTH_API_KEY, SLIM_AUTH_CHATGPT,
     };
-    use crate::auth::{has_consumed_refresh_token, remember_consumed_refresh_token};
-    use crate::types::{AccountsStore, AuthMode, StoredAccount};
+    use crate::auth::test_support::{account, jwt, seed_accounts, AuthTestEnv};
+    use crate::auth::{
+        get_account, get_codex_auth_file, get_codex_home, has_consumed_refresh_token,
+        load_accounts, read_current_auth, refresh_chatgpt_tokens, remember_consumed_refresh_token,
+        sync_account_auth_file,
+    };
+    use crate::types::{AccountsStore, AuthData, AuthMode, StoredAccount};
+
+    fn expire_id(account: &mut StoredAccount) {
+        if let AuthData::ChatGPT {
+            id_token,
+            account_id,
+            ..
+        } = &mut account.auth_data
+        {
+            *id_token = jwt(account_id.as_deref(), Some(1));
+        }
+    }
+
+    fn stored_refresh(id: &str) -> String {
+        match get_account(id).unwrap().unwrap().auth_data {
+            AuthData::ChatGPT { refresh_token, .. } => refresh_token,
+            _ => panic!("expected ChatGPT account"),
+        }
+    }
+
+    fn fresh_response(identity: &str, refresh: &str) -> serde_json::Value {
+        serde_json::json!({"id_token":jwt(Some(identity), Some(chrono::Utc::now().timestamp() + 3600)),
+            "access_token":"new-access", "refresh_token":refresh})
+    }
+
+    #[tokio::test]
+    async fn switching_saves_actual_outgoing_account_despite_missing_or_stale_marker() {
+        for marked in [false, true] {
+            let _env = AuthTestEnv::new();
+            let a = account("a");
+            let b = account("b");
+            let c = account("c");
+            seed_accounts(
+                vec![a.clone(), b.clone(), c.clone()],
+                marked.then_some(a.id.as_str()),
+            );
+            let mut live = b.clone();
+            if let AuthData::ChatGPT { refresh_token, .. } = &mut live.auth_data {
+                *refresh_token = "b-live".into();
+            }
+            sync_account_auth_file(&live).unwrap();
+            super::switch_account_by_id(&c.id).await.unwrap();
+            assert_eq!(stored_refresh(&b.id), "b-live");
+            assert_eq!(
+                load_accounts().unwrap().active_account_id.as_deref(),
+                Some(c.id.as_str())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn different_codex_home_blocks_switch_before_refresh_or_overwrite() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let other_home = get_codex_home().unwrap().join("previous-home");
+        std::fs::create_dir_all(&other_home).unwrap();
+        let mut live = a.clone();
+        if let AuthData::ChatGPT { refresh_token, .. } = &mut live.auth_data {
+            *refresh_token = "a-live".into();
+        }
+        crate::auth::sync_account_auth_file_at_home(&live, &other_home).unwrap();
+        let mut store = load_accounts().unwrap();
+        store.active_account_home = Some(
+            std::fs::canonicalize(&other_home)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        crate::auth::save_accounts(&store).unwrap();
+        let before = std::fs::read(get_codex_auth_file().unwrap()).unwrap();
+        assert!(super::switch_account_by_id(&b.id)
+            .await
+            .unwrap_err()
+            .contains("different CODEX_HOME"));
+        assert!(env.requests().is_empty());
+        assert_eq!(
+            std::fs::read(get_codex_auth_file().unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(
+            crate::auth::read_auth_at_home(&other_home)
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "a-live"
+        );
+        assert_eq!(
+            load_accounts().unwrap().active_account_id.as_deref(),
+            Some(a.id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_refreshes_access_only_expiry() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        if let AuthData::ChatGPT { access_token, .. } = &mut b.auth_data {
+            *access_token = jwt(Some("b"), Some(1));
+        }
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        env.respond(fresh_response("b", "b-next"));
+        super::switch_account_by_id(&b.id).await.unwrap();
+        assert_eq!(env.requests(), ["b-refresh"]);
+        assert_eq!(
+            read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "b-next"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_refresh_keeps_active_account_and_saved_rotation() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let before = std::fs::read(get_codex_auth_file().unwrap()).unwrap();
+        env.respond(serde_json::json!({"access_token":"new-access","refresh_token":"b-next"}));
+        assert!(super::delete_account(a.id.clone()).await.is_err());
+        assert!(get_account(&a.id).unwrap().is_some());
+        assert_eq!(stored_refresh(&b.id), "b-next");
+        assert_eq!(
+            std::fs::read(get_codex_auth_file().unwrap()).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_actual_unmarked_account_is_guarded_and_switches_replacement() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let b = account("b");
+        seed_accounts(vec![a.clone(), b.clone()], None);
+        sync_account_auth_file(&b).unwrap();
+        env.running(true);
+        assert!(super::delete_account(b.id.clone()).await.is_err());
+        assert!(get_account(&b.id).unwrap().is_some());
+        env.running(false);
+        super::delete_account(b.id.clone()).await.unwrap();
+        assert!(get_account(&b.id).unwrap().is_none());
+        assert_eq!(
+            load_accounts().unwrap().active_account_id.as_deref(),
+            Some(a.id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn slim_import_reconciles_live_rotation_before_duplicate_check() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        seed_accounts(vec![a.clone()], Some(&a.id));
+        let mut live = a.clone();
+        if let AuthData::ChatGPT { refresh_token, .. } = &mut live.auth_data {
+            *refresh_token = "a-live".into();
+        }
+        sync_account_auth_file(&live).unwrap();
+        live.name = "different-import-name".into();
+        let encoded = encode_slim_payload_from_store(&AccountsStore {
+            accounts: vec![live],
+            ..AccountsStore::default()
+        })
+        .unwrap();
+        env.running(true);
+        let summary = super::import_accounts_slim_text(encoded).await.unwrap();
+        assert_eq!(summary.skipped_count, 1);
+        assert_eq!(stored_refresh(&a.id), "a-live");
+        assert!(env.requests().is_empty());
+        assert_eq!(
+            read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "a-live"
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_round_trip_keeps_tokens_rotated_by_codex() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let b = account("b");
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let mut live = a.clone();
+        if let AuthData::ChatGPT {
+            refresh_token,
+            access_token,
+            ..
+        } = &mut live.auth_data
+        {
+            *refresh_token = "a-live-refresh".into();
+            *access_token = "a-live-access".into();
+        }
+        sync_account_auth_file(&live).unwrap();
+        super::switch_account_by_id(&b.id).await.unwrap();
+        assert_eq!(stored_refresh(&a.id), "a-live-refresh");
+        assert!(has_consumed_refresh_token(
+            &load_accounts().unwrap(),
+            "a-refresh"
+        ));
+        super::switch_account_by_id(&a.id).await.unwrap();
+        let tokens = read_current_auth().unwrap().unwrap().tokens.unwrap();
+        assert_eq!(tokens.refresh_token, "a-live-refresh");
+        assert_eq!(tokens.access_token, "a-live-access");
+        assert!(env.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn switch_refreshes_expired_id_even_when_access_is_valid() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let config = get_codex_home().unwrap().join("config.toml");
+        std::fs::write(&config, "model = \"existing-model\"\n").unwrap();
+        env.respond(fresh_response("b", "b-rotated"));
+        super::switch_account_by_id(&b.id).await.unwrap();
+        assert_eq!(env.requests(), ["b-refresh"]);
+        assert_eq!(
+            load_accounts().unwrap().active_account_id.as_deref(),
+            Some(b.id.as_str())
+        );
+        assert_eq!(
+            read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "b-rotated"
+        );
+        assert_eq!(
+            std::fs::read_to_string(config).unwrap(),
+            "model = \"existing-model\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_id_refresh_stops_switch_but_retry_uses_saved_rotation() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let original_auth = std::fs::read(get_codex_auth_file().unwrap()).unwrap();
+        env.respond(serde_json::json!({"access_token":"new-access", "refresh_token":"b-rotated"}));
+        assert!(super::switch_account_by_id(&b.id)
+            .await
+            .unwrap_err()
+            .contains("id_token"));
+        assert_eq!(stored_refresh(&b.id), "b-rotated");
+        assert_eq!(
+            load_accounts().unwrap().active_account_id.as_deref(),
+            Some(a.id.as_str())
+        );
+        assert_eq!(
+            std::fs::read(get_codex_auth_file().unwrap()).unwrap(),
+            original_auth
+        );
+        env.respond(fresh_response("b", "b-next"));
+        super::switch_account_by_id(&b.id).await.unwrap();
+        assert_eq!(env.requests(), ["b-refresh", "b-rotated"]);
+        assert_eq!(stored_refresh(&b.id), "b-next");
+    }
+
+    #[tokio::test]
+    async fn failed_config_switch_does_not_roll_back_rotated_credentials() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        b.codex_config = Some("[invalid".into());
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let original_auth = std::fs::read(get_codex_auth_file().unwrap()).unwrap();
+        env.respond(fresh_response("b", "b-rotated"));
+        assert!(super::switch_account_by_id(&b.id).await.is_err());
+        assert_eq!(stored_refresh(&b.id), "b-rotated");
+        assert!(has_consumed_refresh_token(
+            &load_accounts().unwrap(),
+            "b-refresh"
+        ));
+        assert_eq!(
+            load_accounts().unwrap().active_account_id.as_deref(),
+            Some(a.id.as_str())
+        );
+        assert_eq!(
+            std::fs::read(get_codex_auth_file().unwrap()).unwrap(),
+            original_auth
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_and_refresh_share_credential_lock_without_deadlocking() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        env.respond(fresh_response("b", "b-rotated"));
+        let (switched, refreshed) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(
+                    super::switch_account_by_id(&b.id),
+                    refresh_chatgpt_tokens(&b)
+                )
+            })
+            .await
+            .expect("switch/refresh lock ordering must not deadlock");
+        switched.unwrap();
+        refreshed.unwrap();
+        assert_eq!(env.requests(), ["b-refresh"]);
+        assert_eq!(stored_refresh(&b.id), "b-rotated");
+    }
+
+    #[tokio::test]
+    async fn running_codex_blocks_switch_before_any_refresh_or_file_change() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let original_auth = std::fs::read(get_codex_auth_file().unwrap()).unwrap();
+        env.running(true);
+        let error = super::switch_account_by_id(&b.id).await.unwrap_err();
+        assert!(crate::commands::process::is_codex_running_switch_block(
+            &error
+        ));
+        assert!(env.requests().is_empty());
+        assert_eq!(
+            std::fs::read(get_codex_auth_file().unwrap()).unwrap(),
+            original_auth
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_active_account_refreshes_replacement_before_switching() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let mut b = account("b");
+        expire_id(&mut b);
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        env.respond(fresh_response("b", "b-rotated"));
+        super::delete_account(a.id.clone()).await.unwrap();
+        let store = load_accounts().unwrap();
+        assert_eq!(store.accounts.len(), 1);
+        assert_eq!(store.active_account_id.as_deref(), Some(b.id.as_str()));
+        assert_eq!(
+            read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "b-rotated"
+        );
+        assert_eq!(env.requests(), ["b-refresh"]);
+    }
+
+    #[tokio::test]
+    async fn oauth_commit_path_saves_outgoing_tokens_and_rejects_expired_target() {
+        let _env = AuthTestEnv::new();
+        let a = account("a");
+        let b = account("b");
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let mut live = a.clone();
+        if let AuthData::ChatGPT { refresh_token, .. } = &mut live.auth_data {
+            *refresh_token = "live-refresh".into();
+        }
+        sync_account_auth_file(&live).unwrap();
+        let _credentials = crate::auth::lock_credential_exchange_async().await.unwrap();
+        let _transition = super::lock_account_transition().unwrap();
+        super::switch_account_by_id_unlocked(&b.id).unwrap();
+        assert_eq!(stored_refresh(&a.id), "live-refresh");
+        let mut store = load_accounts().unwrap();
+        expire_id(
+            store
+                .accounts
+                .iter_mut()
+                .find(|account| account.id == a.id)
+                .unwrap(),
+        );
+        crate::auth::save_accounts(&store).unwrap();
+        assert!(super::switch_account_by_id_unlocked(&a.id)
+            .unwrap_err()
+            .contains("not fresh"));
+        assert_eq!(
+            load_accounts().unwrap().active_account_id.as_deref(),
+            Some(b.id.as_str())
+        );
+    }
 
     #[test]
     fn slim_round_trip_preserves_api_config() {

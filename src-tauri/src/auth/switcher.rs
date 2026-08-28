@@ -9,7 +9,10 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
 
-use super::{get_config_dir, load_accounts, save_accounts, write_file_atomic};
+use super::{
+    auth_matches_account, get_config_dir, has_consumed_refresh_token, load_accounts,
+    merge_live_account_tokens, reconcile_live_auth, save_accounts, write_file_atomic,
+};
 use crate::types::{
     parse_chatgpt_id_token_claims, AccountsStore, AuthData, AuthDotJson, CodexConfigManagedState,
     CodexConfigTransitionJournal, StoredAccount, TokenData,
@@ -17,6 +20,10 @@ use crate::types::{
 
 /// Get the official Codex home directory
 pub fn get_codex_home() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = super::test_support::codex_home() {
+        return Ok(path);
+    }
     // Check for CODEX_HOME environment variable first
     if let Ok(codex_home) = std::env::var("CODEX_HOME") {
         return Ok(PathBuf::from(codex_home));
@@ -481,7 +488,7 @@ fn recover_codex_config_transition(
     backup_path: &Path,
     config_path: &Path,
 ) -> Result<()> {
-    let Some(journal) = store.codex_config_transition.clone() else {
+    let Some(mut journal) = store.codex_config_transition.clone() else {
         return Ok(());
     };
     if journal.home != home_key {
@@ -492,7 +499,7 @@ fn recover_codex_config_transition(
     }
 
     let current_hash = config_hash(current_config);
-    let recovered_state = recovered_managed_state(&journal, &current_hash)?;
+    let recovered_state = recovered_managed_state(&journal, &current_hash)?.clone();
     let complete_after = journal.before_config_hash == journal.after_config_hash
         || current_hash == journal.after_config_hash;
 
@@ -501,22 +508,70 @@ fn recover_codex_config_transition(
     // the same transition before clearing the journal.
     if complete_after {
         let auth_path = config_path.with_file_name("auth.json");
+        let live = read_auth_at_home(Path::new(home_key))?;
+        if let Some(auth) = &live {
+            if reconcile_live_auth(store, auth).is_some() {
+                save_accounts(store)?;
+            }
+        }
+        let mut target = journal.target_account.clone().or_else(|| {
+            store
+                .accounts
+                .iter()
+                .find(|account| Some(&account.id) == journal.target_account_id.as_ref())
+                .cloned()
+        });
+        let mut preserve_live = false;
+        if let Some(account) = &mut target {
+            // An auth-only refresh may have advanced the canonical record since
+            // this journal was written. Never restore its consumed snapshot.
+            if matches!(&account.auth_data, AuthData::ChatGPT { refresh_token, .. }
+                if has_consumed_refresh_token(store, refresh_token))
+            {
+                if let Some(latest) = store
+                    .accounts
+                    .iter()
+                    .find(|latest| latest.id == account.id)
+                    .cloned()
+                {
+                    if let Some(tokens) = create_auth_json(&latest)?.tokens {
+                        merge_live_account_tokens(store, account, &tokens);
+                    }
+                }
+            }
+            if let Some(auth) = &live {
+                preserve_live = match &auth.tokens {
+                    Some(tokens) if auth.openai_api_key.is_none() => {
+                        merge_live_account_tokens(store, account, tokens)
+                    }
+                    _ => auth_matches_account(auth, account),
+                };
+            }
+            journal.target_account = Some(account.clone());
+        }
+        // Preserve any live rotation in the durable journal before a write can
+        // fail or recovery is deferred because a Codex session is running.
+        store.codex_config_transition = Some(journal.clone());
+        save_accounts(store)?;
+        if !preserve_live && (target.is_some() || live.is_some()) {
+            anyhow::ensure!(
+                !crate::commands::process::codex_is_running().map_err(anyhow::Error::msg)?,
+                "Close Codex sessions before recovering an interrupted account switch"
+            );
+        }
         let target_account = apply_journal_store_delta(store, &journal)?;
         match target_account.as_ref() {
-            Some(account) => {
+            Some(account) if !preserve_live => {
                 let auth = create_auth_json(account)?;
                 let contents = serde_json::to_vec_pretty(&auth)?;
                 write_file_atomic(&auth_path, &contents)?;
             }
-            None => {
-                if auth_path.exists() {
-                    fs::remove_file(&auth_path)?;
-                }
-            }
+            None if auth_path.exists() => fs::remove_file(&auth_path)?,
+            _ => {}
         }
     }
 
-    apply_managed_config_state(store, recovered_state);
+    apply_managed_config_state(store, &recovered_state);
     store.codex_config_transition = None;
     save_accounts(store)?;
     if !recovered_state.backup_captured && backup_path.exists() {
@@ -658,25 +713,44 @@ pub fn recover_pending_account_transition() -> Result<()> {
             .or(store.active_account_home.as_deref())
             .map(PathBuf::from)
             .unwrap_or_else(|| codex_home.clone());
-        let sync_home_key = sync_home.to_string_lossy();
-        let home_is_still_active = store
-            .active_account_home
-            .as_deref()
-            .is_none_or(|active_home| active_home == sync_home_key.as_ref());
-        if home_is_still_active && store.active_account_id.as_deref() == Some(account_id.as_str()) {
-            if let Some(account) = store
-                .accounts
-                .iter()
-                .find(|account| account.id == account_id)
-            {
-                fs::create_dir_all(&sync_home)?;
-                let auth = create_auth_json(account)?;
-                write_file_atomic(
-                    &sync_home.join("auth.json"),
-                    &serde_json::to_vec_pretty(&auth)?,
-                )?;
+        let live = read_auth_at_home(&sync_home)?;
+        if let Some(auth) = &live {
+            if reconcile_live_auth(&mut store, auth).is_some() {
+                save_accounts(&store)?;
             }
         }
+        if let Some(account) = store
+            .accounts
+            .iter()
+            .find(|account| account.id == account_id)
+        {
+            let same_identity = live
+                .as_ref()
+                .is_some_and(|auth| auth_matches_account(auth, account));
+            let live_is_canonical = same_identity
+                && live.as_ref().is_some_and(|auth| {
+                    auth.tokens.as_ref().is_none_or(|tokens| {
+                        !has_consumed_refresh_token(&store, &tokens.refresh_token)
+                    })
+                });
+            let missing_owned_file = live.is_none()
+                && (store.active_account_id.is_none()
+                    || store.active_account_id.as_deref() == Some(&account_id))
+                && store
+                    .active_account_home
+                    .as_deref()
+                    .is_none_or(|home| home == sync_home.to_string_lossy());
+            if !live_is_canonical && (same_identity || missing_owned_file) {
+                // Keep the recovery marker while Codex might still own the
+                // file. Reads can proceed; a later stopped session can recover.
+                if crate::commands::process::codex_is_running().map_err(anyhow::Error::msg)? {
+                    return Ok(());
+                }
+                sync_account_auth_file_at_home(account, &sync_home)?;
+            }
+        }
+        // An external login to a different identity supersedes this auth-only
+        // write. Never restore the marker's account over that login.
         store.pending_auth_sync_account_id = None;
         store.pending_auth_sync_home = None;
         save_accounts(&store)?;
@@ -996,7 +1070,11 @@ pub fn import_from_auth_json_contents(
 
 /// Read the current auth.json file if it exists
 pub fn read_current_auth() -> Result<Option<AuthDotJson>> {
-    let path = get_codex_auth_file()?;
+    read_auth_at_home(&get_codex_home()?)
+}
+
+pub(crate) fn read_auth_at_home(home: &Path) -> Result<Option<AuthDotJson>> {
+    let path = home.join("auth.json");
 
     if !path.exists() {
         return Ok(None);
@@ -1026,10 +1104,228 @@ mod tests {
         merge_codex_config, read_config_backup, recovered_managed_state,
         strip_codex_config_overlay, validate_codex_config, write_config_backup, FileSnapshot,
     };
+    use crate::auth::test_support::{account, seed_accounts, AuthTestEnv};
+    use crate::auth::{
+        get_account, get_codex_home_identity, load_accounts, remember_consumed_refresh_token,
+        save_accounts,
+    };
+    use crate::types::AuthData;
     use crate::types::{
         AccountsStore, CodexConfigManagedState, CodexConfigTransitionJournal, StoredAccount,
     };
     use toml_edit::DocumentMut;
+
+    fn rotate(account: &mut StoredAccount, token: &str) {
+        if let AuthData::ChatGPT { refresh_token, .. } = &mut account.auth_data {
+            *refresh_token = token.into();
+        }
+    }
+
+    fn journal_for(account: &StoredAccount) -> CodexConfigTransitionJournal {
+        let state = CodexConfigManagedState {
+            backup_captured: false,
+            backup_existed: false,
+            backup_home: None,
+            active_overlay: None,
+        };
+        CodexConfigTransitionJournal {
+            home: get_codex_home_identity().unwrap(),
+            target_account_id: Some(account.id.clone()),
+            target_account: Some(account.clone()),
+            remove_account_id: None,
+            before_config_hash: None,
+            after_config_hash: None,
+            before: state.clone(),
+            after: state,
+        }
+    }
+
+    #[test]
+    fn both_recovery_journals_preserve_newer_live_tokens_without_rewriting_them() {
+        for config_journal in [false, true] {
+            let env = AuthTestEnv::new();
+            let a = account("a");
+            seed_accounts(vec![a.clone()], Some(&a.id));
+            let mut store = load_accounts().unwrap();
+            if config_journal {
+                store.codex_config_transition = Some(journal_for(&a));
+            } else {
+                store.pending_auth_sync_account_id = Some(a.id.clone());
+                store.pending_auth_sync_home = store.active_account_home.clone();
+            }
+            save_accounts(&store).unwrap();
+            let mut live = a.clone();
+            rotate(&mut live, "a-live");
+            super::sync_account_auth_file(&live).unwrap();
+            let before = std::fs::read(super::get_codex_auth_file().unwrap()).unwrap();
+            env.running(true);
+            super::recover_pending_account_transition().unwrap();
+            super::recover_pending_account_transition().unwrap();
+            assert_eq!(
+                get_account(&a.id).unwrap().unwrap().auth_data,
+                live.auth_data
+            );
+            assert_eq!(
+                std::fs::read(super::get_codex_auth_file().unwrap()).unwrap(),
+                before
+            );
+            let store = load_accounts().unwrap();
+            assert!(store.codex_config_transition.is_none());
+            assert!(store.pending_auth_sync_account_id.is_none());
+            assert!(crate::auth::has_consumed_refresh_token(&store, "a-refresh"));
+        }
+    }
+
+    #[test]
+    fn pending_auth_defers_consumed_file_repair_until_codex_stops() {
+        for marked in [false, true] {
+            let env = AuthTestEnv::new();
+            let a = account("a");
+            seed_accounts(vec![a.clone()], marked.then_some(a.id.as_str()));
+            super::sync_account_auth_file(&a).unwrap();
+            let mut store = load_accounts().unwrap();
+            rotate(&mut store.accounts[0], "a-next");
+            remember_consumed_refresh_token(&mut store, "a-refresh");
+            store.pending_auth_sync_account_id = Some(a.id.clone());
+            store.pending_auth_sync_home = Some(get_codex_home_identity().unwrap());
+            save_accounts(&store).unwrap();
+            let before = std::fs::read(super::get_codex_auth_file().unwrap()).unwrap();
+            env.running(true);
+            super::recover_pending_account_transition().unwrap();
+            assert_eq!(
+                std::fs::read(super::get_codex_auth_file().unwrap()).unwrap(),
+                before
+            );
+            assert!(load_accounts()
+                .unwrap()
+                .pending_auth_sync_account_id
+                .is_some());
+            env.running(false);
+            super::recover_pending_account_transition().unwrap();
+            assert_eq!(
+                super::read_current_auth()
+                    .unwrap()
+                    .unwrap()
+                    .tokens
+                    .unwrap()
+                    .refresh_token,
+                "a-next"
+            );
+            assert!(load_accounts()
+                .unwrap()
+                .pending_auth_sync_account_id
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn pending_auth_cannot_overwrite_an_external_login_to_another_account() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let b = account("b");
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let mut store = load_accounts().unwrap();
+        store.pending_auth_sync_account_id = Some(a.id.clone());
+        store.pending_auth_sync_home = store.active_account_home.clone();
+        save_accounts(&store).unwrap();
+        let mut live = b.clone();
+        rotate(&mut live, "b-live");
+        super::sync_account_auth_file(&live).unwrap();
+        env.running(true);
+        super::recover_pending_account_transition().unwrap();
+        assert_eq!(
+            get_account(&b.id).unwrap().unwrap().auth_data,
+            live.auth_data
+        );
+        assert_eq!(
+            super::read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "b-live"
+        );
+        assert!(load_accounts()
+            .unwrap()
+            .pending_auth_sync_account_id
+            .is_none());
+    }
+
+    #[test]
+    fn config_journal_never_restores_a_consumed_snapshot_over_the_newer_store() {
+        let _env = AuthTestEnv::new();
+        let a = account("a");
+        seed_accounts(vec![a.clone()], Some(&a.id));
+        let mut store = load_accounts().unwrap();
+        store.codex_config_transition = Some(journal_for(&a));
+        rotate(&mut store.accounts[0], "a-next");
+        remember_consumed_refresh_token(&mut store, "a-refresh");
+        save_accounts(&store).unwrap();
+        super::recover_pending_account_transition().unwrap();
+        assert_eq!(
+            get_account(&a.id).unwrap().unwrap().auth_data,
+            store.accounts[0].auth_data
+        );
+        assert_eq!(
+            super::read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "a-next"
+        );
+        assert!(load_accounts().unwrap().codex_config_transition.is_none());
+    }
+
+    #[test]
+    fn config_recovery_saves_outgoing_tokens_and_waits_before_changing_identity() {
+        let env = AuthTestEnv::new();
+        let a = account("a");
+        let b = account("b");
+        seed_accounts(vec![a.clone(), b.clone()], Some(&a.id));
+        let mut store = load_accounts().unwrap();
+        store.codex_config_transition = Some(journal_for(&b));
+        save_accounts(&store).unwrap();
+        let mut live = a.clone();
+        rotate(&mut live, "a-live");
+        super::sync_account_auth_file(&live).unwrap();
+        env.running(true);
+        assert!(super::recover_pending_account_transition().is_err());
+        assert_eq!(
+            get_account(&a.id).unwrap().unwrap().auth_data,
+            live.auth_data
+        );
+        assert_eq!(
+            super::read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "a-live"
+        );
+        env.running(false);
+        super::recover_pending_account_transition().unwrap();
+        assert_eq!(
+            load_accounts().unwrap().active_account_id.as_deref(),
+            Some(b.id.as_str())
+        );
+        assert_eq!(
+            super::read_current_auth()
+                .unwrap()
+                .unwrap()
+                .tokens
+                .unwrap()
+                .refresh_token,
+            "b-refresh"
+        );
+        assert_eq!(
+            get_account(&a.id).unwrap().unwrap().auth_data,
+            live.auth_data
+        );
+    }
 
     #[test]
     fn api_config_overlays_provider_settings_and_preserves_local_sections() {

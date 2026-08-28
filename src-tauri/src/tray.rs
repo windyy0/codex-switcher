@@ -338,11 +338,7 @@ pub async fn switch_account_from_tray(
     app: AppHandle,
     account_id: String,
 ) -> Result<TrayAccountSwitchOutcome, String> {
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        crate::commands::switch_account_by_id(&account_id)
-    })
-    .await
-    .map_err(|error| format!("Tray account switch task failed: {error}"))?;
+    let result = crate::commands::switch_account_by_id(&account_id).await;
 
     match result {
         Ok(()) => {
