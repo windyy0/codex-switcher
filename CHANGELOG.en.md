@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.108.0] - 2026-08-29
+
 ### Improved
 
 - Unified the clock tooltip styling with separate sections for full local, OpenAI, and UTC date and time, including UTC offsets for the local and OpenAI time zones.
