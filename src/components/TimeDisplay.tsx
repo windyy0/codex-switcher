@@ -1,22 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { invokeBackend } from "../lib/platform";
 import {
   formatClockDate,
-  formatClockOffset,
+  formatClockDateTime,
   formatClockTime,
+  formatClockUtcOffset,
   OPENAI_TIME_ZONE,
 } from "../lib/timeDisplay";
 import type { AppSettings } from "../types";
-
-const LOCAL_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export function TimeDisplay() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [now, setNow] = useState(() => new Date());
-  const localTimeZone = useMemo(() => LOCAL_TIME_ZONE || "Local", []);
 
   useEffect(() => {
     void invokeBackend<AppSettings>("get_app_settings").then(setSettings);
@@ -36,13 +34,18 @@ export function TimeDisplay() {
   const openAiTime = formatClockTime(now, OPENAI_TIME_ZONE);
   const localDate = formatClockDate(now);
   const openAiDate = formatClockDate(now, OPENAI_TIME_ZONE);
-  const localOffset = formatClockOffset(now);
-  const openAiOffset = formatClockOffset(now, OPENAI_TIME_ZONE);
+  const details = [
+    `${t("header.localTime")} · ${formatClockUtcOffset(now)}\n${formatClockDateTime(now)}`,
+    `${t("header.openaiTime")} · ${formatClockUtcOffset(now, OPENAI_TIME_ZONE)}\n${formatClockDateTime(now, OPENAI_TIME_ZONE)}`,
+    `UTC\n${formatClockDateTime(now, "UTC")}`,
+  ].join("\n\n");
 
   return (
     <div
       className="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-xl border border-gray-200/80 bg-gray-50/95 p-1 shadow-sm sm:flex dark:border-gray-700/80 dark:bg-gray-800/95"
-      title={`${t("header.localTime")}: ${localDate} ${localTime} (${localTimeZone}, ${localOffset}) · ${t("header.openaiTime")}: ${openAiDate} ${openAiTime} (${OPENAI_TIME_ZONE}, ${openAiOffset})`}
+      data-tooltip={details}
+      data-tooltip-variant="details"
+      data-tooltip-placement="bottom"
       aria-label={t("header.timeDisplay")}
     >
       <div className="min-w-[142px] rounded-lg bg-white px-2.5 py-1 dark:bg-gray-900">

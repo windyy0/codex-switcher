@@ -6,10 +6,12 @@ const VIEWPORT_GAP = 10;
 const TOOLTIP_OFFSET = 8;
 
 interface TooltipState {
+  target: HTMLElement;
   text: string;
   x: number;
   y: number;
   placement: "top" | "bottom";
+  variant: "default" | "details";
 }
 
 function tooltipTarget(target: EventTarget | null): HTMLElement | null {
@@ -29,6 +31,20 @@ export function TooltipLayer() {
     const halfWidth = tooltipRef.current.getBoundingClientRect().width / 2;
     setAdjustedX(Math.min(window.innerWidth - VIEWPORT_GAP - halfWidth, Math.max(VIEWPORT_GAP + halfWidth, tooltip.x)));
   }, [tooltip]);
+
+  useEffect(() => {
+    const target = tooltip?.target;
+    if (!target) return;
+    // Keep clock details current while the pointer stays over the same element.
+    const observer = new MutationObserver(() => {
+      const text = target.dataset.tooltip?.trim();
+      setTooltip((current) => current?.target === target
+        ? text ? { ...current, text } : null
+        : current);
+    });
+    observer.observe(target, { attributes: true, attributeFilter: ["data-tooltip"] });
+    return () => observer.disconnect();
+  }, [tooltip?.target]);
 
   useEffect(() => {
     const clearTimer = () => {
@@ -55,10 +71,12 @@ export function TooltipLayer() {
           ? requestedPlacement
           : rect.bottom + 52 < window.innerHeight ? "bottom" : "top";
         setTooltip({
+          target: element,
           text,
           x: rect.left + rect.width / 2,
           y: placement === "bottom" ? rect.bottom + TOOLTIP_OFFSET : rect.top - TOOLTIP_OFFSET,
           placement,
+          variant: element.dataset.tooltipVariant === "details" ? "details" : "default",
         });
       };
 
@@ -115,11 +133,19 @@ export function TooltipLayer() {
   return createPortal(
     <div
       ref={tooltipRef}
-      className={`app-tooltip app-tooltip--${tooltip.placement}`}
+      className={`app-tooltip app-tooltip--${tooltip.placement}${tooltip.variant === "details" ? " app-tooltip--details" : ""}`}
       role="tooltip"
       style={{ left: adjustedX || tooltip.x, top: tooltip.y }}
     >
-      {tooltip.text}
+      {tooltip.variant === "details" ? tooltip.text.split("\n\n").map((section, index) => {
+        const [label, ...lines] = section.split("\n");
+        return (
+          <div key={index} className="app-tooltip__section">
+            <div className="app-tooltip__label">{label}</div>
+            <div className="app-tooltip__value">{lines.join("\n")}</div>
+          </div>
+        );
+      }) : tooltip.text}
     </div>,
     document.body,
   );

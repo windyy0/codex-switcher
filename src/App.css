@@ -147,6 +147,32 @@
   transform-origin: bottom center;
 }
 
+.app-tooltip--details {
+  min-width: 14rem;
+  padding: 0.65rem 0.8rem;
+  text-align: left;
+}
+
+.app-tooltip__section + .app-tooltip__section {
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid rgb(156 163 175 / 0.2);
+}
+
+.app-tooltip__label {
+  margin-bottom: 0.2rem;
+  font-size: 0.6875rem;
+  opacity: 0.75;
+}
+
+.app-tooltip__value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: pre-line;
+}
+
 .dark .app-tooltip {
   border-color: rgb(75 85 99 / 0.85);
   background: rgb(31 41 55 / 0.96);
