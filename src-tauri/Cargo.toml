@@ -13,6 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+tauri = { version = "2.10", features = ["test"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+muda = { version = "0.17.1", default-features = false }
+
 [dependencies]
 tauri = { version = "2.10", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"

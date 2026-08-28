@@ -11,6 +11,7 @@
     "check:i18n:strict": "node scripts/check-i18n.mjs --strict",
     "test:reset-credits": "node --experimental-strip-types --test tests/resetCredits.test.ts",
     "test:time-display": "node --experimental-strip-types --test tests/timeDisplay.test.ts",
+    "test:tray:windows": "powershell -NoProfile -File scripts/test-tray-windows.ps1",
     "preview": "vite preview",
     "tauri": "sh ./scripts/tauri.sh",
     "tauri:win": "tauri",

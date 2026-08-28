@@ -1,11 +1,14 @@
+mod menu;
+
+use menu::{Entry, NativeMenu};
+
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use tauri::{
-    menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Runtime,
+    AppHandle, Emitter, Manager, Runtime,
 };
 
 use crate::{
@@ -70,7 +73,8 @@ struct AccountUsageUpdatedPayload {
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let store = load_accounts().unwrap_or_default();
     let settings = load_app_settings().unwrap_or_default();
-    let menu = build_menu(app, &store, &settings)?;
+    let mut native_menu = NativeMenu::new(app)?;
+    native_menu.update(app, &menu_entries(&store, &settings))?;
 
     #[cfg(target_os = "linux")]
     let icon = app
@@ -84,7 +88,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip("Codex Switcher")
-        .menu(&menu)
+        .menu(&native_menu.root)
         .on_menu_event(handle_menu_event);
 
     #[cfg(target_os = "macos")]
@@ -96,6 +100,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false);
 
     builder.build(app)?;
+    app.manage(Mutex::new(native_menu));
     refresh_menu(app);
 
     watch_accounts_file(app.clone());
@@ -137,151 +142,115 @@ fn handle_tray_icon_event<R: Runtime>(tray: &tauri::tray::TrayIcon<R>, event: Tr
 // Native menu (the only tray interaction on Linux; right-click on macOS/Windows)
 // ============================================================================
 
-fn build_menu<R: Runtime>(
-    app: &AppHandle<R>,
-    store: &AccountsStore,
-    settings: &AppSettings,
-) -> tauri::Result<Menu<R>> {
-    let menu = Menu::new(app)?;
+fn menu_entries(store: &AccountsStore, settings: &AppSettings) -> Vec<Entry> {
     let resolved_code = crate::i18n::resolved_code(&settings.language);
     let t = |key| crate::i18n::text_for_code(resolved_code, key);
     let active_account = store
         .active_account_id
         .as_deref()
         .and_then(|id| store.accounts.iter().find(|account| account.id == id));
-
+    let mut entries = Vec::new();
     if let Some(account) = active_account {
-        menu.append(
-            &MenuItemBuilder::with_id(
-                "current-account-summary",
-                format!(
-                    "{}: {}",
-                    t("currentAccount"),
-                    menu_label(&truncate_account_name(&account.name))
-                ),
-            )
-            .enabled(false)
-            .build(app)?,
-        )?;
-        menu.append(
-            &MenuItemBuilder::with_id(
-                "current-usage-summary",
-                active_account_usage_summary(account, resolved_code),
-            )
-            .enabled(false)
-            .build(app)?,
-        )?;
+        entries.push(Entry::item(
+            "current-account-summary",
+            format!(
+                "{}: {}",
+                t("currentAccount"),
+                menu_label(&truncate_account_name(&account.name))
+            ),
+            false,
+        ));
+        entries.push(Entry::item(
+            "current-usage-summary",
+            active_account_usage_summary(account, resolved_code),
+            false,
+        ));
     } else {
-        menu.append(
-            &MenuItemBuilder::with_id("empty", t("noAccounts"))
-                .enabled(false)
-                .build(app)?,
-        )?;
+        entries.push(Entry::item("empty", t("noAccounts"), false));
     }
-
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItemBuilder::with_id(OPEN_ITEM_ID, t("openApp")).build(app)?)?;
+    entries.push(Entry::separator("summary-separator"));
+    entries.push(Entry::item(OPEN_ITEM_ID, t("openApp"), true));
 
     if !store.accounts.is_empty() {
-        let switch_menu = Submenu::new(app, t("switchAccount"), true)?;
-        let switch_accounts = recent_switch_accounts(store);
-        for account in &switch_accounts {
+        let mut accounts = Vec::new();
+        for account in recent_switch_accounts(store) {
             let is_active = store.active_account_id.as_deref() == Some(&account.id);
-            let account_name = menu_label(&truncate_account_name(&account.name));
+            let name = menu_label(&truncate_account_name(&account.name));
             let label = if is_active {
-                format!("✓ {account_name}")
+                format!("✓ {name}")
             } else {
-                account_name
+                name
             };
-            // Account choices are regular menu items, not native checkboxes. Windows toggles a
-            // checkbox before the switch confirmation resolves, which leaves a false second
-            // checkmark behind when the user cancels.
-            let item = MenuItemBuilder::with_id(account_menu_id(&account.id), label)
-                .enabled(!is_active)
-                .build(app)?;
-            switch_menu.append(&item)?;
+            // Use real account IDs, never reusable slot IDs: a queued click must
+            // still target the displayed account after the recent list changes.
+            accounts.push(Entry::item(account_menu_id(&account.id), label, !is_active));
         }
-        switch_menu.append(&PredefinedMenuItem::separator(app)?)?;
-        switch_menu.append(
-            &MenuItemBuilder::with_id(MANAGE_ACCOUNTS_ITEM_ID, t("manageAllAccounts"))
-                .build(app)?,
-        )?;
-        menu.append(&switch_menu)?;
+        accounts.push(Entry::separator("accounts-separator"));
+        accounts.push(Entry::item(
+            MANAGE_ACCOUNTS_ITEM_ID,
+            t("manageAllAccounts"),
+            true,
+        ));
+        entries.push(Entry::submenu(
+            "switch-accounts",
+            t("switchAccount"),
+            accounts,
+        ));
     }
-
     if let Some(account) = active_account {
-        let supports_usage_actions = !account.disabled
+        let enabled = !account.disabled
             && !account.health_blocks_account_actions()
             && account.auth_mode == AuthMode::ChatGPT;
-        let active_actions = Submenu::new(app, t("currentAccountActions"), true)?;
-        active_actions.append(
-            &MenuItemBuilder::with_id(REFRESH_ACTIVE_ITEM_ID, t("refreshCurrentAccount"))
-                .enabled(supports_usage_actions)
-                .build(app)?,
-        )?;
-        active_actions.append(
-            &MenuItemBuilder::with_id(WARMUP_ACTIVE_ITEM_ID, t("warmupCurrentAccount"))
-                .enabled(supports_usage_actions)
-                .build(app)?,
-        )?;
-        menu.append(&active_actions)?;
+        entries.push(Entry::submenu(
+            "active-actions",
+            t("currentAccountActions"),
+            vec![
+                Entry::item(REFRESH_ACTIVE_ITEM_ID, t("refreshCurrentAccount"), enabled),
+                Entry::item(WARMUP_ACTIVE_ITEM_ID, t("warmupCurrentAccount"), enabled),
+            ],
+        ));
     }
-
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    entries.push(Entry::separator("settings-separator"));
     #[cfg(target_os = "windows")]
-    {
-        let display_menu = Submenu::new(app, t("displayComponents"), true)?;
-        display_menu.append(
-            &CheckMenuItemBuilder::with_id(FLOATING_VISIBLE_ID, t("floatingWindow"))
-                .checked(settings.floating.visible)
-                .build(app)?,
-        )?;
-        display_menu.append(
-            &CheckMenuItemBuilder::with_id(TASKBAR_VISIBLE_ID, t("taskbarWidget"))
-                .checked(settings.taskbar.enabled)
-                .build(app)?,
-        )?;
-        display_menu.append(&PredefinedMenuItem::separator(app)?)?;
-        display_menu.append(
-            &MenuItemBuilder::with_id(FLOATING_SETTINGS_ITEM_ID, t("floatingSettings"))
-                .build(app)?,
-        )?;
-        menu.append(&display_menu)?;
-    }
+    entries.push(Entry::submenu(
+        "display-components",
+        t("displayComponents"),
+        vec![
+            Entry::check(
+                FLOATING_VISIBLE_ID,
+                t("floatingWindow"),
+                settings.floating.visible,
+            ),
+            Entry::check(
+                TASKBAR_VISIBLE_ID,
+                t("taskbarWidget"),
+                settings.taskbar.enabled,
+            ),
+            Entry::separator("display-separator"),
+            Entry::item(FLOATING_SETTINGS_ITEM_ID, t("floatingSettings"), true),
+        ],
+    ));
     #[cfg(target_os = "macos")]
-    append_dock_settings_menu(app, &menu, settings, resolved_code)?;
-    menu.append(&MenuItemBuilder::with_id(SETTINGS_ITEM_ID, t("settingsEllipsis")).build(app)?)?;
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItemBuilder::with_id(QUIT_ITEM_ID, t("quitApp")).build(app)?)?;
-    Ok(menu)
-}
-
-#[cfg(target_os = "macos")]
-fn append_dock_settings_menu<R: Runtime>(
-    app: &AppHandle<R>,
-    menu: &Menu<R>,
-    settings: &AppSettings,
-    resolved_code: &str,
-) -> tauri::Result<()> {
-    let t = |key| crate::i18n::text_for_code(resolved_code, key);
-    let dock_settings = Submenu::with_items(
-        app,
+    entries.push(Entry::submenu(
+        "dock-settings",
         t("dockIcon"),
-        true,
-        &[
-            &CheckMenuItemBuilder::with_id(crate::app_menu::DOCK_SHOW_IN_DOCK_ID, t("showInDock"))
-                .checked(settings.dock_display_mode == crate::app_menu::DockDisplayMode::ShowInDock)
-                .build(app)?,
-            &CheckMenuItemBuilder::with_id(
+        vec![
+            Entry::check(
+                crate::app_menu::DOCK_SHOW_IN_DOCK_ID,
+                t("showInDock"),
+                settings.dock_display_mode == crate::app_menu::DockDisplayMode::ShowInDock,
+            ),
+            Entry::check(
                 crate::app_menu::DOCK_MENU_BAR_ONLY_ID,
                 t("menuBarOnly"),
-            )
-            .checked(settings.dock_display_mode == crate::app_menu::DockDisplayMode::MenuBarOnly)
-            .build(app)?,
+                settings.dock_display_mode == crate::app_menu::DockDisplayMode::MenuBarOnly,
+            ),
         ],
-    )?;
-    menu.append(&dock_settings)?;
-    Ok(())
+    ));
+    entries.push(Entry::item(SETTINGS_ITEM_ID, t("settingsEllipsis"), true));
+    entries.push(Entry::separator("quit-separator"));
+    entries.push(Entry::item(QUIT_ITEM_ID, t("quitApp"), true));
+    entries
 }
 
 fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
@@ -540,13 +509,13 @@ fn refresh_menu_on_main_thread<R: Runtime>(app: &AppHandle<R>) {
                 settings.tray_display_mode,
             );
             let tooltip = tray_tooltip(&store, resolved_code);
-            let menu = build_menu(app, &store, &settings).map_err(|error| error.to_string())?;
-            Ok((menu, title, tooltip, settings.tray_display_mode))
+            let state = app.state::<Mutex<NativeMenu<R>>>();
+            let mut menu = state.lock().map_err(|error| error.to_string())?;
+            menu.update(app, &menu_entries(&store, &settings))
+                .map_err(|error| error.to_string())?;
+            Ok((title, tooltip, settings.tray_display_mode))
         }) {
-        Ok((menu, title, tooltip, mode)) => {
-            if let Err(error) = tray.set_menu(Some(menu)) {
-                eprintln!("Failed to refresh tray menu: {error}");
-            }
+        Ok((title, tooltip, mode)) => {
             refresh_tray_display(&tray, mode, title.as_deref(), &tooltip);
         }
         Err(error) => eprintln!("Failed to build tray menu: {error}"),
@@ -667,13 +636,11 @@ fn active_usage_title(active_account_id: Option<&str>) -> String {
         .and_then(|cache| cache.get(active_account_id).cloned());
 
     match usage {
-        Some(usage) if usage.error.is_none() => {
-            usage_title(
-                usage.primary_used_percent,
-                usage.secondary_used_percent,
-                usage.primary_window_minutes,
-            )
-        }
+        Some(usage) if usage.error.is_none() => usage_title(
+            usage.primary_used_percent,
+            usage.secondary_used_percent,
+            usage.primary_window_minutes,
+        ),
         _ => "H:-- W:--".to_string(),
     }
 }
@@ -772,13 +739,11 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
             .and_then(|store| store.active_account_id)
             .and_then(|id| get_account(&id).ok().flatten());
 
-        if let Some(account) =
-            account.filter(|account| {
-                account.auth_mode == AuthMode::ChatGPT
-                    && !account.disabled
-                    && !account.health_blocks_account_actions()
-            })
-        {
+        if let Some(account) = account.filter(|account| {
+            account.auth_mode == AuthMode::ChatGPT
+                && !account.disabled
+                && !account.health_blocks_account_actions()
+        }) {
             match tauri::async_runtime::block_on(fetch_usage_cached(&account.id, false)) {
                 // Keep the last known title on transient fetch errors.
                 Ok(usage) => ingest_usage(&app, vec![usage]),
@@ -907,7 +872,10 @@ mod tests {
 
     #[test]
     fn usage_title_omits_missing_windows() {
-        assert_eq!(usage_title(Some(27.0), Some(82.0), Some(5 * 60)), "H:73% W:18%");
+        assert_eq!(
+            usage_title(Some(27.0), Some(82.0), Some(5 * 60)),
+            "H:73% W:18%"
+        );
         assert_eq!(usage_title(None, Some(35.0), None), "W:65%");
         assert_eq!(usage_title(Some(27.0), None, Some(5 * 60)), "H:73%");
         assert_eq!(usage_title(Some(27.0), None, Some(30 * 24 * 60)), "M:73%");

@@ -6,6 +6,10 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed all Windows tray menu actions becoming unresponsive after extended uptime. Quota refreshes now reuse native menu items instead of exhausting the 16-bit Windows command ID range, with regression coverage for 10,000 refreshes and native menu events.
+
 ## [0.107.11] - 2026-08-26
 
 ### Improved
