@@ -6,6 +6,11 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed active-account credential synchronization allowing a stale subscription expiry from an ID token to overwrite the newer date saved from the live accounts endpoint; ID-token expiry claims are now only a fallback when local metadata is missing.
+- Fixed Refresh all swallowing subscription-metadata failures; remaining accounts and usage still finish updating before the partial failure is reported.
+
 ## [0.108.0] - 2026-08-29
 
 ### Improved

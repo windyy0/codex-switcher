@@ -258,8 +258,12 @@ fn merge_auth_file_tokens(account: &mut StoredAccount, tokens: TokenData) -> Aut
     if let Some(plan_type) = incoming_claims.plan_type {
         account.plan_type = Some(plan_type);
     }
-    if let Some(subscription_expires_at) = incoming_claims.subscription_expires_at {
-        account.subscription_expires_at = Some(subscription_expires_at);
+    // auth.json is authoritative for credentials, not live subscription
+    // metadata. Its ID token can keep the pre-renewal entitlement after Codex
+    // rotates an access token, so only use this claim as a missing-value
+    // fallback. The accounts-check endpoint owns later subscription updates.
+    if account.subscription_expires_at.is_none() {
+        account.subscription_expires_at = incoming_claims.subscription_expires_at;
     }
     AuthFileTokenMerge::Updated
 }
@@ -502,8 +506,11 @@ fn apply_refresh_response(
     if let Some(plan_type) = claims.plan_type {
         account.plan_type = Some(plan_type);
     }
-    if let Some(subscription_expires_at) = claims.subscription_expires_at {
-        account.subscription_expires_at = Some(subscription_expires_at);
+    // A refresh response can omit a newly issued ID token and retain stale
+    // entitlement claims. Preserve metadata previously fetched from the live
+    // accounts-check endpoint, using the ID-token claim only as a fallback.
+    if account.subscription_expires_at.is_none() {
+        account.subscription_expires_at = claims.subscription_expires_at;
     }
 
     Ok((account, token_error))
@@ -701,12 +708,22 @@ mod tests {
     use std::sync::Arc;
 
     fn id_token(account_id: &str, email: &str, plan_type: &str) -> String {
+        id_token_with_subscription(account_id, email, plan_type, None)
+    }
+
+    fn id_token_with_subscription(
+        account_id: &str,
+        email: &str,
+        plan_type: &str,
+        subscription_expires_at: Option<&str>,
+    ) -> String {
         let payload = serde_json::json!({
             "exp": chrono::Utc::now().timestamp() + 3600,
             "email": email,
             "https://api.openai.com/auth": {
                 "chatgpt_account_id": account_id,
                 "chatgpt_plan_type": plan_type,
+                "chatgpt_subscription_active_until": subscription_expires_at,
             }
         });
         format!(
@@ -1194,6 +1211,79 @@ mod tests {
         assert_eq!(access_token, "new-access");
         assert_eq!(refresh_token, "new-refresh");
         assert_eq!(account_id.as_deref(), Some("account-a"));
+    }
+
+    #[test]
+    fn id_token_subscription_claim_is_only_a_missing_value_fallback() {
+        let live_expiry = chrono::DateTime::parse_from_rfc3339("2026-09-27T07:09:59Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let stale_expiry = chrono::DateTime::parse_from_rfc3339("2026-08-27T07:09:59Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let stale_id_token = id_token_with_subscription(
+            "account-a",
+            "person@example.com",
+            "plus",
+            Some("2026-08-27T07:09:59Z"),
+        );
+
+        let mut account = StoredAccount::new_chatgpt(
+            "ChatGPT".into(),
+            Some("person@example.com".into()),
+            Some("plus".into()),
+            Some(live_expiry),
+            id_token("account-a", "person@example.com", "plus"),
+            "old-access".into(),
+            "old-refresh".into(),
+            Some("account-a".into()),
+        );
+        assert_eq!(
+            merge_auth_file_tokens(
+                &mut account,
+                TokenData {
+                    id_token: stale_id_token.clone(),
+                    access_token: "new-access".into(),
+                    refresh_token: "new-refresh".into(),
+                    account_id: Some("account-a".into()),
+                },
+            ),
+            AuthFileTokenMerge::Updated
+        );
+        assert_eq!(account.subscription_expires_at, Some(live_expiry));
+
+        let mut missing = StoredAccount::new_chatgpt(
+            "ChatGPT".into(),
+            Some("person@example.com".into()),
+            Some("plus".into()),
+            None,
+            id_token("account-a", "person@example.com", "plus"),
+            "old-access".into(),
+            "old-refresh".into(),
+            Some("account-a".into()),
+        );
+        merge_auth_file_tokens(
+            &mut missing,
+            TokenData {
+                id_token: stale_id_token.clone(),
+                access_token: "new-access".into(),
+                refresh_token: "new-refresh".into(),
+                account_id: Some("account-a".into()),
+            },
+        );
+        assert_eq!(missing.subscription_expires_at, Some(stale_expiry));
+
+        let refreshed = apply_refresh_response(
+            account,
+            RefreshTokenResponse {
+                id_token: Some(stale_id_token),
+                access_token: "newer-access".into(),
+                refresh_token: Some("newer-refresh".into()),
+            },
+        )
+        .unwrap()
+        .0;
+        assert_eq!(refreshed.subscription_expires_at, Some(live_expiry));
     }
 
     #[test]

@@ -7,6 +7,7 @@ import type {
   ImportAccountsSummary,
 } from "../types";
 import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
+import { runWithConcurrency } from "../lib/concurrency";
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 
 const ACCOUNT_USAGE_UPDATED_EVENT = "account-usage-updated";
@@ -49,27 +50,6 @@ export function useAccounts() {
     if (!isTauriRuntime() || usages.length === 0) return;
     void invokeBackend("report_usage", { usages }).catch(() => {});
   }, []);
-
-  const runWithConcurrency = useCallback(
-    async <T,>(
-      items: T[],
-      worker: (item: T) => Promise<void>,
-      concurrency: number
-    ) => {
-      if (items.length === 0) return;
-      const limit = Math.min(Math.max(concurrency, 1), items.length);
-      let index = 0;
-      const runners = Array.from({ length: limit }, async () => {
-        while (true) {
-          const current = index++;
-          if (current >= items.length) return;
-          await worker(items[current]);
-        }
-      });
-      await Promise.allSettled(runners);
-    },
-    []
-  );
 
   const loadAccounts = useCallback(async (preserveUsage = false, silent = false) => {
     try {
@@ -159,16 +139,23 @@ export function useAccounts() {
           return;
         }
 
+        let metadataRefreshError: unknown;
         if (options?.refreshMetadata) {
-          await runWithConcurrency(
-            list,
-            async (account) => {
-              await invokeBackend<AccountInfo>("refresh_account_metadata", {
-                accountId: account.id,
-              });
-            },
-            maxConcurrentUsageRequests
-          );
+          try {
+            await runWithConcurrency(
+              list,
+              async (account) => {
+                await invokeBackend<AccountInfo>("refresh_account_metadata", {
+                  accountId: account.id,
+                });
+              },
+              maxConcurrentUsageRequests
+            );
+          } catch (error) {
+            // Finish usage polling and reload successful metadata updates before
+            // reporting the partial failure to the manual-refresh UI.
+            metadataRefreshError = error;
+          }
         }
 
         const accountIds = list.map((account) => account.id);
@@ -220,12 +207,13 @@ export function useAccounts() {
 
         reportUsageToTray(Array.from(usageResults.values()));
         await loadAccounts(true, true);
+        if (metadataRefreshError) throw metadataRefreshError;
       } catch (err) {
         console.error("Failed to refresh usage:", err);
         throw err;
       }
     },
-    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, reportUsageToTray, runWithConcurrency]
+    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, reportUsageToTray]
   );
 
   const refreshSingleUsage = useCallback(async (
