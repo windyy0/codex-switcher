@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use crate::account_health::{classify_http_error, healthy_observation};
+use crate::api::client::chatgpt_client;
 use crate::auth::{ensure_chatgpt_tokens_fresh, refresh_chatgpt_tokens};
 use crate::types::{
     AccountHealthSource, AuthData, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload,
@@ -361,7 +362,7 @@ async fn send_chatgpt_get_request(
     access_token: &str,
     chatgpt_account_id: Option<&str>,
 ) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
+    let client = chatgpt_client()?;
     let headers = build_chatgpt_headers(access_token, chatgpt_account_id)?;
     println!("[Usage] Requesting: {url}");
 
@@ -378,7 +379,7 @@ async fn send_chatgpt_warmup_request(
     chatgpt_account_id: Option<&str>,
     stream: bool,
 ) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
+    let client = chatgpt_client()?;
     let headers = build_chatgpt_headers(access_token, chatgpt_account_id)?;
     let payload = build_warmup_payload(stream, false);
 

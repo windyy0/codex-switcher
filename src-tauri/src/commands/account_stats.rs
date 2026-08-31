@@ -7,6 +7,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::client::chatgpt_client;
 use crate::auth::{ensure_chatgpt_tokens_fresh, load_accounts, refresh_chatgpt_tokens};
 use crate::types::{AuthData, AuthMode, StoredAccount};
 
@@ -224,7 +225,7 @@ async fn fetch_profile_usage(account: &StoredAccount) -> anyhow::Result<AccountU
 
 async fn send_profile_usage_request(account: &StoredAccount) -> anyhow::Result<reqwest::Response> {
     let (access_token, chatgpt_account_id) = extract_chatgpt_auth(account)?;
-    let client = reqwest::Client::new();
+    let client = chatgpt_client()?;
 
     Ok(client
         .get(CHATGPT_PROFILE_USAGE_URL)
@@ -264,7 +265,7 @@ async fn parse_profile_usage_response(
 
 async fn fetch_reset_credits(account: &StoredAccount) -> anyhow::Result<AccountResetCredits> {
     let (access_token, chatgpt_account_id) = extract_chatgpt_auth(account)?;
-    let client = reqwest::Client::new();
+    let client = chatgpt_client()?;
     let response = client
         .get(CHATGPT_RESET_CREDITS_URL)
         .headers(build_reset_credits_headers(

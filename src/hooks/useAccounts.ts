@@ -7,10 +7,12 @@ import type {
   ImportAccountsSummary,
 } from "../types";
 import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
+import { createSingleFlight, withTimeout } from "../lib/async";
 import { runWithConcurrency } from "../lib/concurrency";
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 
 const ACCOUNT_USAGE_UPDATED_EVENT = "account-usage-updated";
+const BACKEND_REFRESH_TIMEOUT_MS = 30_000;
 
 interface AccountUsageUpdatedPayload {
   usage?: UsageInfo;
@@ -21,6 +23,8 @@ export function useAccounts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const accountsRef = useRef<AccountWithUsage[]>([]);
+  const usageRefreshSingleFlightRef = useRef(createSingleFlight<void>());
+  const usageRefreshIncludesMetadataRef = useRef(false);
   const maxConcurrentUsageRequests = 10;
 
   useEffect(() => {
@@ -98,7 +102,7 @@ export function useAccounts() {
     }
   }, []);
 
-  const refreshUsage = useCallback(
+  const performRefreshUsage = useCallback(
     async (
       accountList?: AccountInfo[] | AccountWithUsage[],
       options?: { refreshMetadata?: boolean }
@@ -145,9 +149,13 @@ export function useAccounts() {
             await runWithConcurrency(
               list,
               async (account) => {
-                await invokeBackend<AccountInfo>("refresh_account_metadata", {
-                  accountId: account.id,
-                });
+                await withTimeout(
+                  invokeBackend<AccountInfo>("refresh_account_metadata", {
+                    accountId: account.id,
+                  }),
+                  BACKEND_REFRESH_TIMEOUT_MS,
+                  `Account metadata refresh timed out after ${BACKEND_REFRESH_TIMEOUT_MS / 1000} seconds`
+                );
               },
               maxConcurrentUsageRequests
             );
@@ -174,10 +182,14 @@ export function useAccounts() {
           list,
           async (account) => {
             try {
-              const usage = await invokeBackend<UsageInfo>("get_usage", {
-                accountId: account.id,
-                forceRefresh: Boolean(options?.refreshMetadata),
-              });
+              const usage = await withTimeout(
+                invokeBackend<UsageInfo>("get_usage", {
+                  accountId: account.id,
+                  forceRefresh: Boolean(options?.refreshMetadata),
+                }),
+                BACKEND_REFRESH_TIMEOUT_MS,
+                `Usage refresh timed out after ${BACKEND_REFRESH_TIMEOUT_MS / 1000} seconds`
+              );
               usageResults.set(account.id, usage);
             } catch (err) {
               console.error("Failed to refresh usage:", err);
@@ -216,6 +228,37 @@ export function useAccounts() {
     [buildUsageError, loadAccounts, maxConcurrentUsageRequests, reportUsageToTray]
   );
 
+  const refreshUsage = useCallback(
+    async function refreshUsageSingleFlight(
+      accountList?: AccountInfo[] | AccountWithUsage[],
+      options?: { refreshMetadata?: boolean }
+    ): Promise<void> {
+      const singleFlight = usageRefreshSingleFlightRef.current;
+      const joinedExistingRequest = singleFlight.isRunning();
+      const existingRequestIncludesMetadata = usageRefreshIncludesMetadataRef.current;
+      const needsMetadata = Boolean(options?.refreshMetadata);
+
+      if (!joinedExistingRequest) {
+        usageRefreshIncludesMetadataRef.current = needsMetadata;
+      }
+
+      await singleFlight.run(async () => {
+        try {
+          await performRefreshUsage(accountList, options);
+        } finally {
+          usageRefreshIncludesMetadataRef.current = false;
+        }
+      });
+
+      // A manual refresh must not silently lose its metadata refresh merely
+      // because it arrived while a background usage-only poll was in flight.
+      if (joinedExistingRequest && needsMetadata && !existingRequestIncludesMetadata) {
+        await refreshUsageSingleFlight(accountList, options);
+      }
+    },
+    [performRefreshUsage]
+  );
+
   const refreshSingleUsage = useCallback(async (
     accountId: string,
     options?: { refreshMetadata?: boolean }
@@ -251,7 +294,11 @@ export function useAccounts() {
           a.id === accountId ? { ...a, usageLoading: true } : a
         )
       );
-      const usage = await invokeBackend<UsageInfo>("get_usage", { accountId, forceRefresh: true });
+      const usage = await withTimeout(
+        invokeBackend<UsageInfo>("get_usage", { accountId, forceRefresh: true }),
+        BACKEND_REFRESH_TIMEOUT_MS,
+        `Usage refresh timed out after ${BACKEND_REFRESH_TIMEOUT_MS / 1000} seconds`
+      );
       const refreshedAt = Date.now();
       setAccounts((prev) =>
         prev.map((a) =>

@@ -4,9 +4,11 @@ import type {
   AccountUsageStats,
   AccountWithUsage,
 } from "../types";
+import { withTimeout } from "../lib/async";
 import { invokeBackend } from "../lib/platform";
 
 const RESET_CREDITS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const BACKEND_REFRESH_TIMEOUT_MS = 30_000;
 
 type ResetCreditsByAccount = Record<string, AccountResetCredits | null>;
 
@@ -46,7 +48,11 @@ export function useResetCredits(accounts: AccountWithUsage[]) {
       const existing = inFlightRef.current.get(accountId);
       if (existing) return existing;
 
-      const request = invokeBackend<AccountUsageStats>("get_account_usage_stats", { accountId })
+      const request = withTimeout(
+        invokeBackend<AccountUsageStats>("get_account_usage_stats", { accountId }),
+        BACKEND_REFRESH_TIMEOUT_MS,
+        `Reset-credit refresh timed out after ${BACKEND_REFRESH_TIMEOUT_MS / 1000} seconds`
+      )
         .then((stats) => {
           const resetCredits = stats.account_id === accountId ? stats.reset_credits : null;
           storeResetCredits(accountId, resetCredits);
