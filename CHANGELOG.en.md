@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.108.2] - 2026-08-31
+
 ### Fixed
 
 - Fixed Refresh all or per-account usage refresh spinning indefinitely after a network interruption. ChatGPT usage, account-statistics, and reset-credit requests now have explicit connection and request timeouts; the UI recovers from stalled backend calls, and overlapping manual and scheduled refreshes are coalesced instead of accumulating in a queue.
