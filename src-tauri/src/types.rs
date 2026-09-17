@@ -117,6 +117,14 @@ pub enum TaskbarDoubleClickAction {
     OpenMain,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskbarResetDisplay {
+    #[default]
+    Countdown,
+    ExactTime,
+}
+
 pub const TASKBAR_MIN_WIDTH: i32 = 224;
 pub const TASKBAR_MAX_WIDTH: i32 = 336;
 
@@ -125,6 +133,7 @@ pub const TASKBAR_MAX_WIDTH: i32 = 336;
 pub struct TaskbarSettings {
     pub enabled: bool,
     pub layout: TaskbarLayout,
+    pub reset_display: TaskbarResetDisplay,
     pub double_click_action: TaskbarDoubleClickAction,
     pub last_error: Option<String>,
     pub width: i32,
@@ -137,6 +146,7 @@ impl Default for TaskbarSettings {
         Self {
             enabled: true,
             layout: TaskbarLayout::Detailed,
+            reset_display: TaskbarResetDisplay::Countdown,
             double_click_action: TaskbarDoubleClickAction::ToggleFloating,
             last_error: None,
             width: TASKBAR_MIN_WIDTH,
@@ -754,7 +764,7 @@ pub struct CreditStatusDetails {
 mod tests {
     use super::{
         parse_chatgpt_id_token_claims, AccountInfo, AppLanguage, AppSettings, DockDisplayMode,
-        FloatingSettings, StoredAccount, TrayDisplayMode, TASKBAR_MIN_WIDTH,
+        FloatingSettings, StoredAccount, TaskbarResetDisplay, TrayDisplayMode, TASKBAR_MIN_WIDTH,
     };
     use base64::Engine;
     use chrono::{Duration, Utc};
@@ -836,6 +846,10 @@ mod tests {
         assert!(settings.close_behavior_prompt_enabled);
         assert!(!settings.show_dual_clock);
         assert!(settings.taskbar.enabled);
+        assert_eq!(
+            settings.taskbar.reset_display,
+            TaskbarResetDisplay::Countdown
+        );
         assert_eq!(settings.taskbar.width, TASKBAR_MIN_WIDTH);
         assert_eq!(settings.taskbar.offset_x, 0);
         assert_eq!(settings.taskbar.offset_y, 0);

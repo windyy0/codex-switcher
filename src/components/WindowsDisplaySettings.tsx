@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { invokeBackend } from "../lib/platform";
-import type { AppSettings, FloatingField, TaskbarDoubleClickAction, TaskbarLayout } from "../types";
+import type { AppSettings, FloatingField, TaskbarDoubleClickAction, TaskbarLayout, TaskbarResetDisplay } from "../types";
 import { SelectMenu } from "./SelectMenu";
 
 function Toggle({ value, label, onChange }: { value: boolean; label: string; onChange: (next: boolean) => void }) {
@@ -80,6 +80,7 @@ export function WindowsDisplaySettings({ section }: { section: "floating" | "tas
         <div className="flex items-center justify-between gap-6 p-5"><div><div className="font-semibold text-gray-900 dark:text-gray-100">{t("settings.taskbarWidget")}</div><p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("settings.taskbarDescription")}</p></div><Toggle value={settings.taskbar.enabled} label={t("settings.taskbarWidget")} onChange={(enabled) => updateTaskbar({ enabled })} /></div>
         <div className="grid gap-4 border-t border-gray-100 p-5 dark:border-gray-800 sm:grid-cols-2">
           <label className="min-w-0 space-y-2 text-sm text-gray-600 dark:text-gray-300"><span>{t("settings.taskbarLayout")}</span><SelectMenu className="w-full" value={settings.taskbar.layout} onChange={(value) => updateTaskbar({ layout: value as TaskbarLayout })} ariaLabel={t("settings.taskbarLayout")} options={[{ value: "detailed", label: t("settings.layoutDetailed") }, { value: "minimal", label: t("settings.layoutMinimal") }, { value: "compact", label: t("settings.layoutCompact") }]} /></label>
+          <label className="min-w-0 space-y-2 text-sm text-gray-600 dark:text-gray-300"><span>{t("settings.taskbarResetDisplay")}</span><SelectMenu className="w-full" value={settings.taskbar.reset_display} onChange={(value) => updateTaskbar({ reset_display: value as TaskbarResetDisplay })} ariaLabel={t("settings.taskbarResetDisplay")} options={[{ value: "countdown", label: t("settings.resetCountdown") }, { value: "exact_time", label: t("settings.resetExactTime") }]} /></label>
           <label className="min-w-0 space-y-2 text-sm text-gray-600 dark:text-gray-300"><span>{t("settings.taskbarWidth")}</span><SelectMenu className="w-full" value={String(settings.taskbar.width)} onChange={(value) => updateTaskbar({ width: Number(value) })} ariaLabel={t("settings.taskbarWidth")} options={[{ value: "224", label: t("settings.taskbarWidthStandard") }, { value: "280", label: t("settings.taskbarWidthWide") }, { value: "336", label: t("settings.taskbarWidthExtraWide") }]} /></label>
           <label className="min-w-0 space-y-2 text-sm text-gray-600 dark:text-gray-300"><span>{t("settings.doubleClickAction")}</span><SelectMenu className="w-full" value={settings.taskbar.double_click_action} onChange={(value) => updateTaskbar({ double_click_action: value as TaskbarDoubleClickAction })} ariaLabel={t("settings.doubleClickAction")} options={[{ value: "toggle_floating", label: t("settings.actionFloating") }, { value: "open_main", label: t("settings.actionMain") }]} /></label>
         </div>

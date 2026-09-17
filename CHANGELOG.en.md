@@ -6,6 +6,10 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Added
+
+- Added a Windows taskbar setting for showing reset timing as either a countdown or an exact reset time. Exact mode shows the local time for the 5-hour window, a date for weekly resets more than one day away, and a time when less than one day remains. The taskbar now falls back to the weekly reset when the weekly limit is exhausted or 5-hour reset data is unavailable.
+
 ## [0.108.2] - 2026-08-31
 
 ### Fixed

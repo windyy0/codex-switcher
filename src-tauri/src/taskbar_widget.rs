@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::{Datelike, Local, TimeZone, Timelike};
 use tauri::{AppHandle, Runtime};
 use windows::{
     core::{w, PCWSTR, PWSTR},
@@ -54,8 +55,8 @@ use windows::{
 use crate::{
     auth::{load_accounts, load_app_settings},
     types::{
-        AppSettings, TaskbarDoubleClickAction, TaskbarLayout, UsageInfo, TASKBAR_MAX_WIDTH,
-        TASKBAR_MIN_WIDTH,
+        AppSettings, TaskbarDoubleClickAction, TaskbarLayout, TaskbarResetDisplay, UsageInfo,
+        TASKBAR_MAX_WIDTH, TASKBAR_MIN_WIDTH,
     },
 };
 
@@ -85,6 +86,7 @@ struct WidgetModel {
     secondary_resets_at: Option<i64>,
     account: String,
     layout: TaskbarLayout,
+    reset_display: TaskbarResetDisplay,
     enabled: bool,
     chinese: bool,
     width: i32,
@@ -136,6 +138,7 @@ fn refresh_model(usage: Option<&UsageInfo>) {
         model.account_id = active_id.map(str::to_owned);
         model.enabled = settings.taskbar.enabled;
         model.layout = settings.taskbar.layout;
+        model.reset_display = settings.taskbar.reset_display;
         model.width = settings
             .taskbar
             .width
@@ -962,12 +965,12 @@ fn formatted_detailed_cells() -> [String; 4] {
         .map(|value| format!("{value:.0}%"))
         .unwrap_or_else(|| "--".into());
     let weekly_only = !model.has_primary_window && model.has_secondary_window;
+    let (reset_timestamp, reset_window) = selected_reset(&model);
     let reset = reset_label(
-        if weekly_only {
-            model.secondary_resets_at
-        } else {
-            model.primary_resets_at
-        },
+        reset_timestamp,
+        reset_window,
+        model.reset_display,
+        model.primary_window_minutes,
         model.chinese,
     );
     let primary_label = primary_window_label(model.primary_window_minutes, model.chinese);
@@ -1025,12 +1028,12 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
         .map(|v| format!("{v:.0}%"))
         .unwrap_or_else(|| "--".into());
     let weekly_only = !model.has_primary_window && model.has_secondary_window;
+    let (reset_timestamp, reset_window) = selected_reset(&model);
     let reset = reset_label(
-        if weekly_only {
-            model.secondary_resets_at
-        } else {
-            model.primary_resets_at
-        },
+        reset_timestamp,
+        reset_window,
+        model.reset_display,
+        model.primary_window_minutes,
         model.chinese,
     );
     let primary_label = primary_window_label(model.primary_window_minutes, model.chinese);
@@ -1152,11 +1155,41 @@ fn primary_window_label(window_minutes: Option<i64>, chinese: bool) -> &'static 
     }
 }
 
-fn reset_label(timestamp: Option<i64>, chinese: bool) -> String {
-    reset_label_at(timestamp, chrono::Utc::now().timestamp(), chinese)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetWindow {
+    Primary,
+    Weekly,
 }
 
-fn reset_label_at(timestamp: Option<i64>, now: i64, chinese: bool) -> String {
+fn selected_reset(model: &WidgetModel) -> (Option<i64>, ResetWindow) {
+    let weekly_exhausted =
+        model.has_secondary_window && model.secondary.is_some_and(|remaining| remaining <= 0.0);
+    if model.has_secondary_window
+        && (!model.has_primary_window || model.primary_resets_at.is_none() || weekly_exhausted)
+    {
+        (model.secondary_resets_at, ResetWindow::Weekly)
+    } else {
+        (model.primary_resets_at, ResetWindow::Primary)
+    }
+}
+
+fn reset_label(
+    timestamp: Option<i64>,
+    window: ResetWindow,
+    display: TaskbarResetDisplay,
+    primary_window_minutes: Option<i64>,
+    chinese: bool,
+) -> String {
+    let now = chrono::Utc::now().timestamp();
+    match display {
+        TaskbarResetDisplay::Countdown => reset_countdown_label_at(timestamp, now, chinese),
+        TaskbarResetDisplay::ExactTime => {
+            exact_reset_label_at(timestamp, now, window, primary_window_minutes, chinese)
+        }
+    }
+}
+
+fn reset_countdown_label_at(timestamp: Option<i64>, now: i64, chinese: bool) -> String {
     let Some(timestamp) = timestamp else {
         return "--".into();
     };
@@ -1190,6 +1223,37 @@ fn reset_label_at(timestamp: Option<i64>, now: i64, chinese: bool) -> String {
         } else {
             format!("{minutes}m")
         }
+    }
+}
+
+fn exact_reset_label_at(
+    timestamp: Option<i64>,
+    now: i64,
+    window: ResetWindow,
+    primary_window_minutes: Option<i64>,
+    chinese: bool,
+) -> String {
+    let Some(timestamp) = timestamp else {
+        return "--".into();
+    };
+    if timestamp <= now {
+        return if chinese {
+            "现在".into()
+        } else {
+            "Now".into()
+        };
+    }
+    let Some(local) = Local.timestamp_opt(timestamp, 0).single() else {
+        return "--".into();
+    };
+    let show_date = timestamp - now >= 24 * 60 * 60
+        && (window == ResetWindow::Weekly
+            || primary_window_minutes
+                .is_some_and(|minutes| minutes >= MONTHLY_WINDOW_MINUTES_THRESHOLD));
+    if show_date {
+        format!("{}.{}", local.month(), local.day())
+    } else {
+        format!("{:02}:{:02}", local.hour(), local.minute())
     }
 }
 
@@ -1396,32 +1460,136 @@ mod tests {
     fn reset_labels_use_adaptive_localized_units() {
         let now = 1_800_000_000;
         assert_eq!(
-            reset_label_at(Some(now + 3 * 24 * 60 * 60 + 4 * 60 * 60), now, true),
+            reset_countdown_label_at(Some(now + 3 * 24 * 60 * 60 + 4 * 60 * 60), now, true),
             "3天"
         );
         assert_eq!(
-            reset_label_at(Some(now + 4 * 60 * 60 + 27 * 60), now, true),
+            reset_countdown_label_at(Some(now + 4 * 60 * 60 + 27 * 60), now, true),
             "4小时"
         );
-        assert_eq!(reset_label_at(Some(now + 27 * 60), now, true), "27分钟");
-        assert_eq!(reset_label_at(Some(now), now, true), "现在");
         assert_eq!(
-            reset_label_at(Some(now + 3 * 24 * 60 * 60), now, false),
+            reset_countdown_label_at(Some(now + 27 * 60), now, true),
+            "27分钟"
+        );
+        assert_eq!(reset_countdown_label_at(Some(now), now, true), "现在");
+        assert_eq!(
+            reset_countdown_label_at(Some(now + 3 * 24 * 60 * 60), now, false),
             "3d"
         );
-        assert_eq!(reset_label_at(Some(now + 4 * 60 * 60), now, false), "4h");
-        assert_eq!(reset_label_at(Some(now + 27 * 60), now, false), "27m");
-        assert_eq!(reset_label_at(Some(now), now, false), "Now");
+        assert_eq!(
+            reset_countdown_label_at(Some(now + 4 * 60 * 60), now, false),
+            "4h"
+        );
+        assert_eq!(
+            reset_countdown_label_at(Some(now + 27 * 60), now, false),
+            "27m"
+        );
+        assert_eq!(reset_countdown_label_at(Some(now), now, false), "Now");
     }
 
     #[test]
     fn reset_labels_do_not_roll_up_before_unit_boundaries() {
         let now = 1_800_000_000;
         assert_eq!(
-            reset_label_at(Some(now + 24 * 60 * 60 - 1), now, true),
+            reset_countdown_label_at(Some(now + 24 * 60 * 60 - 1), now, true),
             "23小时"
         );
-        assert_eq!(reset_label_at(Some(now + 60 * 60 - 1), now, true), "59分钟");
-        assert_eq!(reset_label_at(Some(now + 59), now, true), "现在");
+        assert_eq!(
+            reset_countdown_label_at(Some(now + 60 * 60 - 1), now, true),
+            "59分钟"
+        );
+        assert_eq!(reset_countdown_label_at(Some(now + 59), now, true), "现在");
+    }
+
+    #[test]
+    fn exhausted_weekly_quota_uses_weekly_reset_even_with_a_primary_window() {
+        let model = WidgetModel {
+            primary: Some(75.0),
+            secondary: Some(0.0),
+            has_primary_window: true,
+            has_secondary_window: true,
+            primary_resets_at: Some(1_800_000_000),
+            secondary_resets_at: Some(1_800_100_000),
+            ..WidgetModel::default()
+        };
+
+        assert_eq!(
+            selected_reset(&model),
+            (Some(1_800_100_000), ResetWindow::Weekly)
+        );
+    }
+
+    #[test]
+    fn missing_primary_reset_falls_back_to_available_weekly_reset() {
+        let model = WidgetModel {
+            primary: Some(75.0),
+            secondary: Some(40.0),
+            has_primary_window: true,
+            has_secondary_window: true,
+            primary_resets_at: None,
+            secondary_resets_at: Some(1_800_100_000),
+            ..WidgetModel::default()
+        };
+
+        assert_eq!(
+            selected_reset(&model),
+            (Some(1_800_100_000), ResetWindow::Weekly)
+        );
+    }
+
+    #[test]
+    fn exact_reset_uses_time_for_session_and_near_weekly_reset() {
+        let now = 1_800_000_000;
+        let session_timestamp = now + 5 * 60 * 60;
+        let near_weekly_timestamp = now + 23 * 60 * 60;
+        let expected_session = Local.timestamp_opt(session_timestamp, 0).unwrap();
+        let expected_weekly = Local.timestamp_opt(near_weekly_timestamp, 0).unwrap();
+
+        assert_eq!(
+            exact_reset_label_at(
+                Some(session_timestamp),
+                now,
+                ResetWindow::Primary,
+                Some(5 * 60),
+                true
+            ),
+            format!(
+                "{:02}:{:02}",
+                expected_session.hour(),
+                expected_session.minute()
+            )
+        );
+        assert_eq!(
+            exact_reset_label_at(
+                Some(near_weekly_timestamp),
+                now,
+                ResetWindow::Weekly,
+                Some(5 * 60),
+                true
+            ),
+            format!(
+                "{:02}:{:02}",
+                expected_weekly.hour(),
+                expected_weekly.minute()
+            )
+        );
+    }
+
+    #[test]
+    fn exact_reset_uses_date_for_weekly_reset_at_least_a_day_away() {
+        let now = 1_800_000_000;
+        let timestamp = now + 2 * 24 * 60 * 60;
+        let expected = Local.timestamp_opt(timestamp, 0).unwrap();
+
+        assert_eq!(
+            exact_reset_label_at(
+                Some(timestamp),
+                now,
+                ResetWindow::Weekly,
+                Some(5 * 60),
+                true
+            ),
+            format!("{}.{}", expected.month(), expected.day())
+        );
     }
 }

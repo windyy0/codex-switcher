@@ -4,6 +4,7 @@ export type AuthMode = "api_key" | "chat_g_p_t";
 export type DockDisplayMode = "show_in_dock" | "menu_bar_only";
 export type TaskbarLayout = "detailed" | "minimal" | "compact";
 export type TaskbarDoubleClickAction = "toggle_floating" | "open_main";
+export type TaskbarResetDisplay = "countdown" | "exact_time";
 export type FloatingField = "account" | "primary_usage" | "primary_reset" | "secondary_usage";
 export type AccountHealthStatus =
   | "healthy"
@@ -42,6 +43,7 @@ export interface AppSettings {
   taskbar: {
     enabled: boolean;
     layout: TaskbarLayout;
+    reset_display: TaskbarResetDisplay;
     double_click_action: TaskbarDoubleClickAction;
     last_error: string | null;
     width: number;
