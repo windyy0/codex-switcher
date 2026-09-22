@@ -239,7 +239,7 @@ async fn warmup_with_chatgpt_auth(account: &StoredAccount) -> Result<()> {
 
 fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_json::Value {
     let mut payload = json!({
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "instructions": "You are Codex.",
         "input": [
             {
@@ -718,10 +718,10 @@ mod tests {
     }
 
     #[test]
-    fn warmup_payload_matches_upstream_model_and_prompt() {
+    fn warmup_payload_uses_current_model_and_prompt() {
         let payload = build_warmup_payload(true, false);
 
-        assert_eq!(payload["model"], "gpt-5.6-luna");
+        assert_eq!(payload["model"], "gpt-6-luna");
         assert_eq!(payload["input"][0]["content"][0]["text"], "Thanks");
     }
 
