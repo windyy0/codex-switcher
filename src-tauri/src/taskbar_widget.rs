@@ -55,8 +55,8 @@ use windows::{
 use crate::{
     auth::{load_accounts, load_app_settings},
     types::{
-        AppSettings, TaskbarDoubleClickAction, TaskbarLayout, TaskbarResetDisplay, UsageInfo,
-        TASKBAR_MAX_WIDTH, TASKBAR_MIN_WIDTH,
+        AppSettings, AuthMode, TaskbarDoubleClickAction, TaskbarLayout, TaskbarResetDisplay,
+        UsageInfo, TASKBAR_MAX_WIDTH, TASKBAR_MIN_WIDTH,
     },
 };
 
@@ -64,6 +64,8 @@ const CLASS_NAME: PCWSTR = w!("CodexSwitcherTaskbarWidget");
 const POSITION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const COUNTDOWN_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const MONTHLY_WINDOW_MINUTES_THRESHOLD: i64 = 28 * 24 * 60;
+// Match the frontend's >= 99.5% used cutoff for weekly auto warm-up.
+const WEEKLY_EXHAUSTED_REMAINING_THRESHOLD: f64 = 0.5;
 const ACCOUNT_SAFE_MARGIN_PX: i32 = 8;
 static HWND_WIDGET: AtomicIsize = AtomicIsize::new(0);
 static HWND_TOOLTIP: AtomicIsize = AtomicIsize::new(0);
@@ -77,6 +79,7 @@ static TOOLTIP_TEXT: LazyLock<Mutex<Vec<u16>>> = LazyLock::new(|| Mutex::new(Vec
 #[derive(Default)]
 struct WidgetModel {
     account_id: Option<String>,
+    api_mode: bool,
     primary: Option<f64>,
     secondary: Option<f64>,
     has_primary_window: bool,
@@ -136,6 +139,7 @@ fn refresh_model(usage: Option<&UsageInfo>) {
             clear_usage(&mut model);
         }
         model.account_id = active_id.map(str::to_owned);
+        model.api_mode = account.is_some_and(|item| item.auth_mode == AuthMode::ApiKey);
         model.enabled = settings.taskbar.enabled;
         model.layout = settings.taskbar.layout;
         model.reset_display = settings.taskbar.reset_display;
@@ -676,8 +680,27 @@ unsafe fn render_gdi(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC) {
     let _ = SetBkMode(memory_dc, TRANSPARENT);
     let _ = SetTextColor(memory_dc, COLORREF(foreground));
 
-    let (layout, line1, line2, weekly_only) = formatted_lines();
-    if layout == TaskbarLayout::Detailed && weekly_only {
+    let (layout, line1, line2, weekly_only, api_mode) = formatted_lines();
+    if api_mode {
+        let row_height = 16 * dpi / 96;
+        let content_height = row_height * 2;
+        let content_top = ((rect.bottom - rect.top - content_height) / 2).max(0);
+        let mut top = RECT {
+            top: content_top,
+            bottom: content_top + row_height,
+            ..rect
+        };
+        let mut bottom = RECT {
+            top: content_top + row_height,
+            bottom: content_top + content_height,
+            ..rect
+        };
+        draw(&mut top, &line1, memory_dc);
+        let visible_right = visible_account_right(hwnd, &bottom).unwrap_or(bottom.right);
+        let account_width = reserve_account_text_width(&mut bottom, visible_right, dpi);
+        let account = fit_account_name(&line2, account_width, memory_dc);
+        draw(&mut bottom, &account, memory_dc);
+    } else if layout == TaskbarLayout::Detailed && weekly_only {
         let [weekly, reset, _, account] = formatted_detailed_cells();
         let row_height = 16 * dpi / 96;
         let content_height = row_height * 2;
@@ -879,6 +902,8 @@ fn fit_account_name(
         "账号: "
     } else if value.starts_with("账号：") {
         "账号："
+    } else if value.starts_with("Account: ") {
+        "Account: "
     } else {
         ""
     };
@@ -1017,8 +1042,12 @@ fn formatted_detailed_cells() -> [String; 4] {
     }
 }
 
-fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
+fn formatted_lines() -> (TaskbarLayout, String, String, bool, bool) {
     let model = MODEL.lock().unwrap_or_else(|error| error.into_inner());
+    if model.api_mode {
+        let (top, bottom) = api_mode_lines(model.chinese, &model.account);
+        return (model.layout, top, bottom, false, true);
+    }
     let p = model
         .primary
         .map(|v| format!("{v:.0}%"))
@@ -1045,17 +1074,20 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
                 format!("周 {s}"),
                 format!("重置 {reset}"),
                 true,
+                false,
             ),
             TaskbarLayout::Detailed => (
                 model.layout,
                 format!("Week {s}"),
                 format!("Reset {reset}"),
                 true,
+                false,
             ),
             TaskbarLayout::Minimal if model.chinese => (
                 model.layout,
                 format!("周：{s}"),
                 format!("重置：{reset}"),
+                false,
                 false,
             ),
             TaskbarLayout::Minimal => (
@@ -1063,17 +1095,20 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
                 format!("Week: {s}"),
                 format!("Reset: {reset}"),
                 false,
+                false,
             ),
             TaskbarLayout::Compact if model.chinese => (
                 model.layout,
                 format!("周 {s}  ·  {reset}"),
                 String::new(),
                 false,
+                false,
             ),
             TaskbarLayout::Compact => (
                 model.layout,
                 format!("W {s}  ·  {reset}"),
                 String::new(),
+                false,
                 false,
             ),
         };
@@ -1089,6 +1124,7 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
                 format!("账号：{}", model.account)
             },
             false,
+            false,
         ),
         TaskbarLayout::Detailed => (
             model.layout,
@@ -1098,6 +1134,7 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
             } else {
                 model.account.clone()
             },
+            false,
             false,
         ),
         TaskbarLayout::Minimal if model.chinese => (
@@ -1109,6 +1146,7 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
                 String::new()
             },
             false,
+            false,
         ),
         TaskbarLayout::Minimal => (
             model.layout,
@@ -1118,6 +1156,7 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
             } else {
                 String::new()
             },
+            false,
             false,
         ),
         TaskbarLayout::Compact if model.chinese => (
@@ -1129,6 +1168,7 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
             },
             String::new(),
             false,
+            false,
         ),
         TaskbarLayout::Compact => (
             model.layout,
@@ -1139,7 +1179,16 @@ fn formatted_lines() -> (TaskbarLayout, String, String, bool) {
             },
             String::new(),
             false,
+            false,
         ),
+    }
+}
+
+fn api_mode_lines(chinese: bool, account: &str) -> (String, String) {
+    if chinese {
+        ("API 模式".into(), format!("账号: {account}"))
+    } else {
+        ("API mode".into(), format!("Account: {account}"))
     }
 }
 
@@ -1162,8 +1211,10 @@ enum ResetWindow {
 }
 
 fn selected_reset(model: &WidgetModel) -> (Option<i64>, ResetWindow) {
-    let weekly_exhausted =
-        model.has_secondary_window && model.secondary.is_some_and(|remaining| remaining <= 0.0);
+    let weekly_exhausted = model.has_secondary_window
+        && model
+            .secondary
+            .is_some_and(|remaining| remaining <= WEEKLY_EXHAUSTED_REMAINING_THRESHOLD);
     if model.has_secondary_window
         && (!model.has_primary_window || model.primary_resets_at.is_none() || weekly_exhausted)
     {
@@ -1290,6 +1341,18 @@ mod tests {
         assert_eq!(remaining(Some(-5.0)), Some(100.0));
         assert_eq!(remaining(Some(110.0)), Some(0.0));
         assert_eq!(remaining(Some(f64::NAN)), None);
+    }
+
+    #[test]
+    fn api_mode_shows_only_mode_and_account() {
+        assert_eq!(
+            api_mode_lines(true, "work"),
+            ("API 模式".into(), "账号: work".into())
+        );
+        assert_eq!(
+            api_mode_lines(false, "work"),
+            ("API mode".into(), "Account: work".into())
+        );
     }
 
     #[test]
@@ -1426,7 +1489,7 @@ mod tests {
             model.account = "work".into();
         }
 
-        let (_, _, _, weekly_only) = formatted_lines();
+        let (_, _, _, weekly_only, _) = formatted_lines();
         assert!(weekly_only);
 
         let cells = formatted_detailed_cells();
@@ -1450,7 +1513,7 @@ mod tests {
             model.account = "free".into();
         }
 
-        let (_, first, _, weekly_only) = formatted_lines();
+        let (_, first, _, weekly_only, _) = formatted_lines();
         assert!(!weekly_only);
         assert!(first.starts_with("每月："));
         assert!(!first.contains("5H"));
@@ -1505,7 +1568,7 @@ mod tests {
     fn exhausted_weekly_quota_uses_weekly_reset_even_with_a_primary_window() {
         let model = WidgetModel {
             primary: Some(75.0),
-            secondary: Some(0.0),
+            secondary: remaining(Some(99.8)),
             has_primary_window: true,
             has_secondary_window: true,
             primary_resets_at: Some(1_800_000_000),
@@ -1517,6 +1580,24 @@ mod tests {
             selected_reset(&model),
             (Some(1_800_100_000), ResetWindow::Weekly)
         );
+        assert_eq!(format!("{:.0}%", model.secondary.unwrap()), "0%");
+    }
+
+    #[test]
+    fn weekly_reset_threshold_matches_auto_warmup() {
+        let mut model = WidgetModel {
+            has_primary_window: true,
+            has_secondary_window: true,
+            primary_resets_at: Some(1_800_000_000),
+            secondary_resets_at: Some(1_800_100_000),
+            ..WidgetModel::default()
+        };
+
+        model.secondary = remaining(Some(99.5));
+        assert_eq!(selected_reset(&model).1, ResetWindow::Weekly);
+
+        model.secondary = remaining(Some(99.4));
+        assert_eq!(selected_reset(&model).1, ResetWindow::Primary);
     }
 
     #[test]
