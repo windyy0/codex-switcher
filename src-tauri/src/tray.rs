@@ -44,6 +44,8 @@ const FLOATING_VISIBLE_ID: &str = "floating-visible";
 const TASKBAR_VISIBLE_ID: &str = "taskbar-visible";
 const MAX_RECENT_ACCOUNTS: usize = 8;
 const MAX_MENU_ACCOUNT_NAME_CHARS: usize = 28;
+const ACCOUNT_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const ACCOUNT_METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +107,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 
     watch_accounts_file(app.clone());
     poll_active_account_usage(app.clone());
+    poll_account_metadata();
     Ok(())
 }
 
@@ -758,6 +761,51 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
+fn should_refresh_account_metadata(
+    account: &StoredAccount,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    account.auth_mode == AuthMode::ChatGPT
+        && !account.disabled
+        && !account.health_blocks_account_actions()
+        && account
+            .subscription_metadata_refreshed_at
+            .is_none_or(|refreshed_at| {
+                now.signed_duration_since(refreshed_at)
+                    >= chrono::Duration::from_std(ACCOUNT_METADATA_REFRESH_INTERVAL)
+                        .expect("metadata refresh interval should fit chrono::Duration")
+            })
+}
+
+/// Keep live subscription metadata current even when every webview is hidden
+/// or suspended. The command persists changed values; the accounts-file
+/// watcher above then refreshes the native menu and React views.
+fn poll_account_metadata() {
+    std::thread::spawn(move || loop {
+        let accounts = load_accounts()
+            .map(|store| store.accounts)
+            .unwrap_or_default();
+        let now = chrono::Utc::now();
+
+        for account in accounts
+            .into_iter()
+            .filter(|account| should_refresh_account_metadata(account, now))
+        {
+            let result = tauri::async_runtime::block_on(tokio::time::timeout(
+                ACCOUNT_METADATA_REQUEST_TIMEOUT,
+                crate::commands::refresh_account_metadata(account.id),
+            ));
+            if !matches!(result, Ok(Ok(_))) {
+                // Error bodies may contain account metadata. Keep background
+                // diagnostics deliberately generic.
+                eprintln!("[Account] Background subscription metadata refresh failed");
+            }
+        }
+
+        std::thread::sleep(ACCOUNT_METADATA_REFRESH_INTERVAL);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -790,6 +838,44 @@ mod tests {
         let request = take_pending_tray_switch_request().expect("request should remain queued");
         assert_eq!(request.account_id, "queued-account");
         assert!(take_pending_tray_switch_request().is_none());
+    }
+
+    #[test]
+    fn metadata_poll_only_targets_actionable_chatgpt_accounts() {
+        let now = chrono::Utc::now();
+        let mut account = StoredAccount::new_chatgpt(
+            "ChatGPT".into(),
+            None,
+            None,
+            None,
+            "id-token".into(),
+            "access-token".into(),
+            "refresh-token".into(),
+            None,
+        );
+        assert!(should_refresh_account_metadata(&account, now));
+
+        account.subscription_metadata_refreshed_at = Some(now - chrono::Duration::hours(5));
+        assert!(!should_refresh_account_metadata(&account, now));
+        account.subscription_metadata_refreshed_at = Some(now - chrono::Duration::hours(7));
+        assert!(should_refresh_account_metadata(&account, now));
+
+        account.disabled = true;
+        assert!(!should_refresh_account_metadata(&account, now));
+
+        let api_account = StoredAccount::new_api_key("API".into(), "api-key".into());
+        assert!(!should_refresh_account_metadata(&api_account, now));
+
+        account.disabled = false;
+        crate::account_health::apply_health_observation(
+            &mut account,
+            crate::account_health::classify_http_error(
+                crate::types::AccountHealthSource::AccountsCheck,
+                401,
+                "unauthorized",
+            ),
+        );
+        assert!(!should_refresh_account_metadata(&account, now));
     }
 
     #[test]

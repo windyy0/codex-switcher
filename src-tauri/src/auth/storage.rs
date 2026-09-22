@@ -467,6 +467,7 @@ pub fn update_account_metadata(
     email: Option<String>,
     plan_type: Option<String>,
     subscription_expires_at: Option<Option<DateTime<Utc>>>,
+    subscription_metadata_refreshed_at: Option<DateTime<Utc>>,
 ) -> Result<StoredAccount> {
     let mut store = load_accounts()?;
 
@@ -514,6 +515,13 @@ pub fn update_account_metadata(
     if let Some(subscription_expires_at) = subscription_expires_at {
         if account.subscription_expires_at != subscription_expires_at {
             account.subscription_expires_at = subscription_expires_at;
+            changed = true;
+        }
+    }
+
+    if let Some(refreshed_at) = subscription_metadata_refreshed_at {
+        if account.subscription_metadata_refreshed_at != Some(refreshed_at) {
+            account.subscription_metadata_refreshed_at = Some(refreshed_at);
             changed = true;
         }
     }
@@ -567,12 +575,18 @@ pub fn update_account_chatgpt_tokens(
         account.email = Some(new_email);
     }
 
-    if let Some(new_plan_type) = plan_type {
-        account.plan_type = Some(new_plan_type);
-    }
+    // Token claims are only a fallback until live accounts-check metadata has
+    // been observed. A live response may legitimately contain no expiry.
+    if account.subscription_metadata_refreshed_at.is_none() {
+        if let Some(new_plan_type) = plan_type {
+            account.plan_type = Some(new_plan_type);
+        }
 
-    if let Some(subscription_expires_at) = subscription_expires_at {
-        account.subscription_expires_at = Some(subscription_expires_at);
+        if account.subscription_expires_at.is_none() {
+            if let Some(subscription_expires_at) = subscription_expires_at {
+                account.subscription_expires_at = Some(subscription_expires_at);
+            }
+        }
     }
 
     let updated = account.clone();
@@ -598,7 +612,7 @@ pub fn set_masked_account_ids(ids: Vec<String>) -> Result<()> {
 mod tests {
     use super::{
         get_accounts_file, has_consumed_refresh_token, has_duplicate_chatgpt_credentials,
-        remember_consumed_refresh_token, update_account_metadata, write_file_atomic,
+        load_accounts, remember_consumed_refresh_token, update_account_metadata, write_file_atomic,
         MAX_CONSUMED_REFRESH_TOKEN_HASHES,
     };
     use crate::auth::test_support::{account, seed_accounts, AuthTestEnv};
@@ -740,6 +754,7 @@ mod tests {
             stored.email.clone(),
             stored.plan_type.clone(),
             Some(stored.subscription_expires_at),
+            None,
         )
         .unwrap();
 
@@ -752,5 +767,28 @@ mod tests {
             stored.subscription_expires_at
         );
         assert_eq!(fs::read_to_string(path).unwrap(), deliberately_noncanonical);
+    }
+
+    #[test]
+    fn successful_live_metadata_refresh_persists_its_freshness_time() {
+        let _env = AuthTestEnv::new();
+        let stored = account("freshness");
+        seed_accounts(vec![stored.clone()], Some(&stored.id));
+        let refreshed_at = chrono::DateTime::parse_from_rfc3339("2030-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        let updated =
+            update_account_metadata(&stored.id, None, None, None, None, Some(refreshed_at))
+                .unwrap();
+
+        assert_eq!(
+            updated.subscription_metadata_refreshed_at,
+            Some(refreshed_at)
+        );
+        assert_eq!(
+            load_accounts().unwrap().accounts[0].subscription_metadata_refreshed_at,
+            Some(refreshed_at)
+        );
     }
 }

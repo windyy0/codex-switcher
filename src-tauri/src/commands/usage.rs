@@ -229,6 +229,7 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
                 None,
                 live_metadata.plan_type,
                 Some(live_metadata.subscription_expires_at),
+                Some(chrono::Utc::now()),
             )
             .map_err(|e| e.to_string())?;
             record_account_health(

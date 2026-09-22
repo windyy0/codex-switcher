@@ -245,6 +245,15 @@ impl Default for AppLanguage {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexCloseBehavior {
+    #[default]
+    Ask,
+    Graceful,
+    Force,
+}
+
 fn default_close_behavior_prompt_enabled() -> bool {
     true
 }
@@ -261,6 +270,7 @@ pub struct AppSettings {
     pub language: AppLanguage,
     #[serde(default = "default_close_behavior_prompt_enabled")]
     pub close_behavior_prompt_enabled: bool,
+    pub codex_close_behavior: CodexCloseBehavior,
     #[serde(default = "default_show_dual_clock")]
     pub show_dual_clock: bool,
     pub taskbar: TaskbarSettings,
@@ -274,6 +284,7 @@ impl Default for AppSettings {
             dock_display_mode: DockDisplayMode::default(),
             language: AppLanguage::default(),
             close_behavior_prompt_enabled: true,
+            codex_close_behavior: CodexCloseBehavior::default(),
             show_dual_clock: false,
             taskbar: TaskbarSettings::default(),
             floating: FloatingSettings::default(),
@@ -316,9 +327,13 @@ pub struct StoredAccount {
     pub email: Option<String>,
     /// Plan type: free, plus, pro, team, business, enterprise, edu
     pub plan_type: Option<String>,
-    /// Subscription expiration extracted from ChatGPT ID token, when available
+    /// Last known subscription expiration from live metadata, with ID-token
+    /// claims used only as an import-time fallback.
     #[serde(default)]
     pub subscription_expires_at: Option<DateTime<Utc>>,
+    /// Last successful refresh from the live ChatGPT accounts-check endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_metadata_refreshed_at: Option<DateTime<Utc>>,
     /// Authentication mode
     pub auth_mode: AuthMode,
     /// Authentication credentials
@@ -350,6 +365,7 @@ impl StoredAccount {
             email: None,
             plan_type: None,
             subscription_expires_at: None,
+            subscription_metadata_refreshed_at: None,
             auth_mode: AuthMode::ApiKey,
             auth_data: AuthData::ApiKey { key: api_key },
             codex_config: None,
@@ -378,6 +394,7 @@ impl StoredAccount {
             email,
             plan_type,
             subscription_expires_at,
+            subscription_metadata_refreshed_at: None,
             auth_mode: AuthMode::ChatGPT,
             auth_data: AuthData::ChatGPT {
                 id_token,
@@ -581,6 +598,7 @@ pub struct AccountInfo {
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub subscription_expires_at: Option<DateTime<Utc>>,
+    pub subscription_metadata_refreshed_at: Option<DateTime<Utc>>,
     pub auth_mode: AuthMode,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -592,11 +610,18 @@ pub struct AccountInfo {
 
 impl AccountInfo {
     pub fn from_stored(account: &StoredAccount, active_id: Option<&str>) -> Self {
-        let fallback_subscription_expires_at = match &account.auth_data {
-            AuthData::ChatGPT { id_token, .. } => {
-                parse_chatgpt_id_token_claims(id_token).subscription_expires_at
+        let fallback_subscription_expires_at = if account
+            .subscription_metadata_refreshed_at
+            .is_none()
+        {
+            match &account.auth_data {
+                AuthData::ChatGPT { id_token, .. } => {
+                    parse_chatgpt_id_token_claims(id_token).subscription_expires_at
+                }
+                AuthData::ApiKey { .. } => None,
             }
-            AuthData::ApiKey { .. } => None,
+        } else {
+            None
         };
         let subscription_expires_at = account
             .subscription_expires_at
@@ -619,6 +644,7 @@ impl AccountInfo {
             email: account.email.clone(),
             plan_type,
             subscription_expires_at,
+            subscription_metadata_refreshed_at: account.subscription_metadata_refreshed_at,
             auth_mode: account.auth_mode,
             is_active: active_id == Some(&account.id),
             created_at: account.created_at,
@@ -763,8 +789,9 @@ pub struct CreditStatusDetails {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_chatgpt_id_token_claims, AccountInfo, AppLanguage, AppSettings, DockDisplayMode,
-        FloatingSettings, StoredAccount, TaskbarResetDisplay, TrayDisplayMode, TASKBAR_MIN_WIDTH,
+        parse_chatgpt_id_token_claims, AccountInfo, AppLanguage, AppSettings, CodexCloseBehavior,
+        DockDisplayMode, FloatingSettings, StoredAccount, TaskbarResetDisplay, TrayDisplayMode,
+        TASKBAR_MIN_WIDTH,
     };
     use base64::Engine;
     use chrono::{Duration, Utc};
@@ -786,6 +813,27 @@ mod tests {
                 .map(|value| value.to_rfc3339()),
             Some("2026-04-23T05:03:38+00:00".to_string())
         );
+    }
+
+    #[test]
+    fn live_metadata_can_authoritatively_report_no_subscription_expiry() {
+        let payload = r#"{"https://api.openai.com/auth":{"chatgpt_subscription_active_until":"2030-01-02T03:04:05Z"}}"#;
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        let mut account = StoredAccount::new_chatgpt(
+            "Live metadata".into(),
+            None,
+            Some("plus".into()),
+            None,
+            format!("header.{encoded}.signature"),
+            "access-token".into(),
+            "refresh-token".into(),
+            None,
+        );
+        account.subscription_metadata_refreshed_at = Some(Utc::now());
+
+        let info = AccountInfo::from_stored(&account, None);
+
+        assert_eq!(info.subscription_expires_at, None);
     }
 
     #[test]
@@ -844,6 +892,7 @@ mod tests {
         assert_eq!(settings.dock_display_mode, DockDisplayMode::ShowInDock);
         assert_eq!(settings.language, AppLanguage::default());
         assert!(settings.close_behavior_prompt_enabled);
+        assert_eq!(settings.codex_close_behavior, CodexCloseBehavior::Ask);
         assert!(!settings.show_dual_clock);
         assert!(settings.taskbar.enabled);
         assert_eq!(

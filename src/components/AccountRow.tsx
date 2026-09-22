@@ -5,6 +5,7 @@ import type { AccountResetCredits, AccountWithUsage } from "../types";
 import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
 import { getEffectivePlanType } from "../lib/accountPlan";
 import { getAvailableResetCredits } from "../lib/resetCredits";
+import { getSubscriptionMetadataFreshness } from "../lib/subscriptionMetadata";
 import { isMonthlyWindow } from "../lib/usageWindow";
 import { ResetCreditsMenu } from "./ResetCreditsMenu";
 
@@ -263,6 +264,24 @@ export function AccountRow({
   const expiry = !isApiAccount && account.subscription_expires_at
     ? formatExpiry(account.subscription_expires_at, locale, t)
     : null;
+  const subscriptionMetadataFreshness = getSubscriptionMetadataFreshness(
+    account.subscription_metadata_refreshed_at,
+  );
+  const subscriptionMetadataLabel = subscriptionMetadataFreshness === "unknown"
+    ? t("accountCard.subscriptionMetadataUnknown")
+    : t(
+        subscriptionMetadataFreshness === "fresh"
+          ? "accountCard.subscriptionMetadataFresh"
+          : "accountCard.subscriptionMetadataCached",
+        {
+          time: new Intl.DateTimeFormat(locale, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(new Date(account.subscription_metadata_refreshed_at!)),
+        },
+      );
   const visibleResetCredits = account.disabled ? null : resetCredits;
   const hasResetCredits = getAvailableResetCredits(visibleResetCredits).length > 0;
   const listGridColumns = isApiAccount || (!expiry && !hasResetCredits)
@@ -384,6 +403,9 @@ export function AccountRow({
             {t("accounts.subscriptionExpiry")}
           </div>
           <div className={`${isCardLayout ? "" : "mt-1"} truncate text-xs font-medium ${expiry.tone}`}>{expiry.label}</div>
+          <div className="mt-0.5 truncate text-[10px] font-normal normal-case tracking-normal text-gray-400 dark:text-gray-500">
+            {subscriptionMetadataLabel}
+          </div>
         </button>
       )}
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { isTauriRuntime, openExternalUrl } from "../lib/platform";
 import { useTranslation } from "react-i18next";
@@ -14,6 +14,7 @@ type UpdateStatus =
 
 const MANUAL_UPDATE_CHECK_EVENT = "codex-switcher:check-for-update";
 const IGNORED_UPDATE_VERSION_STORAGE_KEY = "codex-switcher:ignored-update-version";
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const TAGGED_CHANGELOG_URL = "https://github.com/windyy0/codex-switcher/blob/";
 type ReleaseLocale = "zh-CN" | "en-US";
 
@@ -78,10 +79,12 @@ export function UpdateChecker() {
   const { t, i18n } = useTranslation();
   const [status, setStatus] = useState<UpdateStatus>({ kind: "idle" });
   const [dismissed, setDismissed] = useState(false);
+  const checkInFlightRef = useRef(false);
 
   const checkForUpdate = useCallback(async (manual = false) => {
-    if (!isTauriRuntime()) return;
+    if (!isTauriRuntime() || checkInFlightRef.current) return;
 
+    checkInFlightRef.current = true;
     try {
       setStatus({ kind: "checking", manual });
       setDismissed(false);
@@ -109,12 +112,20 @@ export function UpdateChecker() {
       } else {
         setStatus({ kind: "idle" });
       }
+    } finally {
+      checkInFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
     void checkForUpdate(false);
+
+    const interval = window.setInterval(() => {
+      void checkForUpdate(false);
+    }, UPDATE_CHECK_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
   }, [checkForUpdate]);
 
   useEffect(() => {

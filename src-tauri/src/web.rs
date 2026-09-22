@@ -104,6 +104,13 @@ struct MaskedIdsArgs {
     ids: Vec<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseCodexArgs {
+    #[serde(default, alias = "force_close")]
+    force_close: Option<bool>,
+}
+
 #[derive(Debug, Deserialize)]
 struct UploadAuthJsonArgs {
     name: String,
@@ -324,7 +331,10 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(crate::commands::settings::save_language(args.language)?)
         }
         "check_codex_processes" => to_json(check_codex_processes().await?),
-        "kill_codex_processes" => to_json(kill_codex_processes().await?),
+        "kill_codex_processes" => {
+            let args: CloseCodexArgs = parse_args(payload)?;
+            to_json(kill_codex_processes(args.force_close).await?)
+        }
         _ => Err(format!("Unsupported web command: {command}")),
     }
 }

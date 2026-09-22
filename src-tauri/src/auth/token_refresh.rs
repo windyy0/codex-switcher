@@ -255,15 +255,17 @@ fn merge_auth_file_tokens(account: &mut StoredAccount, tokens: TokenData) -> Aut
     if let Some(email) = incoming_claims.email {
         account.email = Some(email);
     }
-    if let Some(plan_type) = incoming_claims.plan_type {
-        account.plan_type = Some(plan_type);
-    }
     // auth.json is authoritative for credentials, not live subscription
     // metadata. Its ID token can keep the pre-renewal entitlement after Codex
-    // rotates an access token, so only use this claim as a missing-value
-    // fallback. The accounts-check endpoint owns later subscription updates.
-    if account.subscription_expires_at.is_none() {
-        account.subscription_expires_at = incoming_claims.subscription_expires_at;
+    // rotates an access token. Once accounts-check has answered, even an empty
+    // expiry is authoritative; token claims are import-time fallbacks only.
+    if account.subscription_metadata_refreshed_at.is_none() {
+        if let Some(plan_type) = incoming_claims.plan_type {
+            account.plan_type = Some(plan_type);
+        }
+        if account.subscription_expires_at.is_none() {
+            account.subscription_expires_at = incoming_claims.subscription_expires_at;
+        }
     }
     AuthFileTokenMerge::Updated
 }
@@ -503,14 +505,16 @@ fn apply_refresh_response(
     if let Some(email) = claims.email {
         account.email = Some(email);
     }
-    if let Some(plan_type) = claims.plan_type {
-        account.plan_type = Some(plan_type);
-    }
     // A refresh response can omit a newly issued ID token and retain stale
     // entitlement claims. Preserve metadata previously fetched from the live
-    // accounts-check endpoint, using the ID-token claim only as a fallback.
-    if account.subscription_expires_at.is_none() {
-        account.subscription_expires_at = claims.subscription_expires_at;
+    // accounts-check endpoint, including an authoritative empty expiry.
+    if account.subscription_metadata_refreshed_at.is_none() {
+        if let Some(plan_type) = claims.plan_type {
+            account.plan_type = Some(plan_type);
+        }
+        if account.subscription_expires_at.is_none() {
+            account.subscription_expires_at = claims.subscription_expires_at;
+        }
     }
 
     Ok((account, token_error))
@@ -1273,8 +1277,43 @@ mod tests {
         );
         assert_eq!(missing.subscription_expires_at, Some(stale_expiry));
 
+        let mut live_without_expiry = StoredAccount::new_chatgpt(
+            "ChatGPT".into(),
+            Some("person@example.com".into()),
+            Some("team".into()),
+            None,
+            id_token("account-a", "person@example.com", "team"),
+            "old-access".into(),
+            "old-refresh".into(),
+            Some("account-a".into()),
+        );
+        live_without_expiry.subscription_metadata_refreshed_at = Some(chrono::Utc::now());
+        merge_auth_file_tokens(
+            &mut live_without_expiry,
+            TokenData {
+                id_token: stale_id_token.clone(),
+                access_token: "new-access".into(),
+                refresh_token: "new-refresh".into(),
+                account_id: Some("account-a".into()),
+            },
+        );
+        assert_eq!(live_without_expiry.plan_type.as_deref(), Some("team"));
+        assert_eq!(live_without_expiry.subscription_expires_at, None);
+
         let refreshed = apply_refresh_response(
             account,
+            RefreshTokenResponse {
+                id_token: Some(stale_id_token.clone()),
+                access_token: "newer-access".into(),
+                refresh_token: Some("newer-refresh".into()),
+            },
+        )
+        .unwrap()
+        .0;
+        assert_eq!(refreshed.subscription_expires_at, Some(live_expiry));
+
+        let refreshed_without_expiry = apply_refresh_response(
+            live_without_expiry,
             RefreshTokenResponse {
                 id_token: Some(stale_id_token),
                 access_token: "newer-access".into(),
@@ -1283,7 +1322,8 @@ mod tests {
         )
         .unwrap()
         .0;
-        assert_eq!(refreshed.subscription_expires_at, Some(live_expiry));
+        assert_eq!(refreshed_without_expiry.plan_type.as_deref(), Some("team"));
+        assert_eq!(refreshed_without_expiry.subscription_expires_at, None);
     }
 
     #[test]

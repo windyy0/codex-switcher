@@ -23,12 +23,13 @@ export function useForceCloseCodexProcesses({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isForceClosing, setIsForceClosing] = useState(false);
 
-  const forceCloseCodexProcesses = useCallback(async () => {
+  const forceCloseCodexProcesses = useCallback(async (forceClose: boolean) => {
     try {
       setIsForceClosing(true);
 
       const result = await invokeBackend<KillCodexProcessesResult>(
-        "kill_codex_processes"
+        "kill_codex_processes",
+        { forceClose },
       );
       const latestProcessInfo = await checkProcesses();
       if (!latestProcessInfo) {
@@ -66,7 +67,7 @@ export function useForceCloseCodexProcesses({
 
       return latestProcessInfo;
     } catch (err) {
-      console.error("Failed to force close Codex processes:", err);
+      console.error("Failed to close Codex processes:", err);
       showToast(i18n.t("forceClose.failed", { error: formatError(err) }), true);
       return null;
     } finally {

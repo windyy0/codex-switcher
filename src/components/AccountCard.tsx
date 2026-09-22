@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { accountHealthBlocksAccountActions } from "../lib/accountHealth";
 import { getEffectivePlanType } from "../lib/accountPlan";
+import { getSubscriptionMetadataFreshness } from "../lib/subscriptionMetadata";
 import { AccountUsageStats } from "./AccountUsageStats";
 import { ResetCreditsMenu } from "./ResetCreditsMenu";
 import { UsageBar } from "./UsageBar";
@@ -343,6 +344,22 @@ export function AccountCard({
   const planColorClass = planColors[planKey] || planColors.free;
   const supportsWarmup = !isApiKeyAccount && !account.disabled && !healthBlocksActions;
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at, t, locale);
+  const subscriptionMetadataFreshness = getSubscriptionMetadataFreshness(
+    account.subscription_metadata_refreshed_at,
+  );
+  const subscriptionMetadataUpdatedAt = account.subscription_metadata_refreshed_at
+    ? new Date(account.subscription_metadata_refreshed_at)
+    : null;
+  const subscriptionMetadataLabel = subscriptionMetadataFreshness === "unknown"
+    ? t("accountCard.subscriptionMetadataUnknown")
+    : t(
+        subscriptionMetadataFreshness === "fresh"
+          ? "accountCard.subscriptionMetadataFresh"
+          : "accountCard.subscriptionMetadataCached",
+        {
+          time: formatLastRefresh(subscriptionMetadataUpdatedAt, t, locale),
+        },
+      );
   const compactResetCredits = !account.is_active;
 
   const handleStatsLoaded = useCallback(
@@ -591,9 +608,12 @@ export function AccountCard({
             <div className="text-gray-400 dark:text-gray-500">
               {t("accountCard.lastUpdated", { time: formatLastRefresh(lastRefresh, t, locale) })}
             </div>
-          <div className={`text-right ${subscriptionStatus.className}`}>
-            {subscriptionStatus.label}
-          </div>
+            <div className={`text-right ${subscriptionStatus.className}`}>
+              <div>{subscriptionStatus.label}</div>
+              <div className="mt-0.5 text-[10px] font-normal text-gray-400 dark:text-gray-500">
+                {subscriptionMetadataLabel}
+              </div>
+            </div>
           </div>
 
           <AccountUsageStats

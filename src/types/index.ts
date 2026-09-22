@@ -2,6 +2,7 @@
 
 export type AuthMode = "api_key" | "chat_g_p_t";
 export type DockDisplayMode = "show_in_dock" | "menu_bar_only";
+export type CodexCloseBehavior = "ask" | "graceful" | "force";
 export type TaskbarLayout = "detailed" | "minimal" | "compact";
 export type TaskbarDoubleClickAction = "toggle_floating" | "open_main";
 export type TaskbarResetDisplay = "countdown" | "exact_time";
@@ -39,6 +40,7 @@ export interface AppSettings {
   dock_display_mode: DockDisplayMode;
   language: string;
   close_behavior_prompt_enabled: boolean;
+  codex_close_behavior: CodexCloseBehavior;
   show_dual_clock: boolean;
   taskbar: {
     enabled: boolean;
@@ -70,6 +72,7 @@ export interface AccountInfo {
   email: string | null;
   plan_type: string | null;
   subscription_expires_at: string | null;
+  subscription_metadata_refreshed_at: string | null;
   auth_mode: AuthMode;
   is_active: boolean;
   created_at: string;

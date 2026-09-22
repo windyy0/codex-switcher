@@ -414,10 +414,12 @@ fn replace_reauthorized_account(
         if candidate.email.is_some() {
             target.email = candidate.email;
         }
-        if candidate.plan_type.is_some() {
+        if target.subscription_metadata_refreshed_at.is_none() && candidate.plan_type.is_some() {
             target.plan_type = candidate.plan_type;
         }
-        if candidate.subscription_expires_at.is_some() {
+        if target.subscription_metadata_refreshed_at.is_none()
+            && candidate.subscription_expires_at.is_some()
+        {
             target.subscription_expires_at = candidate.subscription_expires_at;
         }
     }

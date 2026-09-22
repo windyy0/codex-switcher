@@ -498,8 +498,15 @@ pub async fn delete_account(account_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn rename_account(account_id: String, new_name: String) -> Result<(), String> {
     let _guard = lock_account_transition()?;
-    crate::auth::storage::update_account_metadata(&account_id, Some(new_name), None, None, None)
-        .map_err(|e| e.to_string())?;
+    crate::auth::storage::update_account_metadata(
+        &account_id,
+        Some(new_name),
+        None,
+        None,
+        None,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -661,8 +668,10 @@ pub async fn import_accounts_slim_text(payload: String) -> Result<ImportAccounts
             let existing = &mut current.accounts[existing_index];
             existing.auth_data = account.auth_data;
             existing.email = account.email;
-            existing.plan_type = account.plan_type;
-            existing.subscription_expires_at = account.subscription_expires_at;
+            if existing.subscription_metadata_refreshed_at.is_none() {
+                existing.plan_type = account.plan_type;
+                existing.subscription_expires_at = account.subscription_expires_at;
+            }
             let updated = existing.clone();
             if source_was_rotated {
                 let source = source_refresh_token

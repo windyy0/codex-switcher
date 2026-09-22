@@ -18,8 +18,11 @@ import { SelectMenu } from "./components/SelectMenu";
 import { WindowsDisplaySettings } from "./components/WindowsDisplaySettings";
 import { TimeDisplay } from "./components/TimeDisplay";
 import { TimeDisplaySettings } from "./components/TimeDisplaySettings";
+import { CodexCloseSettings } from "./components/CodexCloseSettings";
 import type {
   AccountWithUsage,
+  AppSettings,
+  CodexCloseBehavior,
   CodexProcessInfo,
   DockDisplayMode,
   UsageInfo,
@@ -363,6 +366,8 @@ function App() {
   const [closeBehaviorPromptOpen, setCloseBehaviorPromptOpen] = useState(false);
   const [closeBehaviorDontAskAgain, setCloseBehaviorDontAskAgain] = useState(false);
   const [isCompletingCloseBehavior, setIsCompletingCloseBehavior] = useState(false);
+  const [codexCloseBehavior, setCodexCloseBehavior] = useState<CodexCloseBehavior>("ask");
+  const [forceCloseSelected, setForceCloseSelected] = useState(false);
   const accountsRef = useRef(accounts);
   const autoWarmupAccountIdsRef = useRef(autoWarmupAccountIds);
   const autoWarmupLedgerRef = useRef(autoWarmupLedger);
@@ -1013,6 +1018,38 @@ function App() {
     formatError: formatWarmupError,
   });
 
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void invokeBackend<AppSettings>("get_app_settings")
+      .then((settings) => {
+        if (!disposed) setCodexCloseBehavior(settings.codex_close_behavior);
+      })
+      .catch((err) => console.error("Failed to load Codex close behavior:", err));
+
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => listen<AppSettings>("settings-changed", ({ payload }) => {
+        setCodexCloseBehavior(payload.codex_close_behavior);
+      }))
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.error("Failed to watch Codex close behavior:", err));
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!forceCloseConfirmOpen) return;
+    setForceCloseSelected(codexCloseBehavior === "force");
+  }, [codexCloseBehavior, forceCloseConfirmOpen]);
+
   const openBlockedTraySwitch = useCallback(
     (accountId: string) => {
       updatePendingTraySwitch(accountId);
@@ -1328,7 +1365,7 @@ function App() {
     };
 
     try {
-      const latestProcessInfo = await forceCloseCodexProcesses();
+      const latestProcessInfo = await forceCloseCodexProcesses(forceCloseSelected);
       if (!latestProcessInfo) {
         clearPendingUnlessReplaced(initialPendingTraySwitchAccountId);
         return;
@@ -1384,13 +1421,13 @@ function App() {
         if (pendingTraySwitchAccountIdRef.current !== accountId) continue;
         updatePendingTraySwitch(null);
         void loadAccounts(true).catch((err) => {
-          console.error("Account switched after force close but the list could not be reloaded:", err);
+          console.error("Account switched after closing Codex but the list could not be reloaded:", err);
         });
         showWarmupToast(t("warmup.switchedAfterClose"));
         return;
       }
     } catch (err) {
-      console.error("Failed to switch account after force close:", err);
+      console.error("Failed to switch account after closing Codex:", err);
       clearPendingUnlessReplaced(inFlightTraySwitchAccountId);
       showWarmupToast(
         t("warmup.switchAfterCloseFailed", { error: formatWarmupError(err) }),
@@ -1403,6 +1440,7 @@ function App() {
   }, [
     checkProcesses,
     forceCloseCodexProcesses,
+    forceCloseSelected,
     formatWarmupError,
     loadAccounts,
     setForceCloseConfirmOpen,
@@ -1940,7 +1978,7 @@ function App() {
     () => accounts.find((account) => account.id === pendingTraySwitchAccountId),
     [accounts, pendingTraySwitchAccountId]
   );
-  const forceCloseConfirmLabel = pendingTraySwitchAccount
+  const closeConfirmLabel = pendingTraySwitchAccount
     ? t("forceClose.switch")
     : t("forceClose.processes");
 
@@ -2373,7 +2411,7 @@ function App() {
                             setForceCloseConfirmOpen(true);
                           }}
                           disabled={isForceClosingCodex}
-                          className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
+                          className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30"
                           data-tooltip={t("header.forceCloseTitle")}
                         >
                           {t("header.forceClose")}
@@ -2671,6 +2709,7 @@ function App() {
               </div>
             </section>
             <TimeDisplaySettings />
+            <CodexCloseSettings />
             {isWindows && <WindowsDisplaySettings section="floating" />}
             {isWindows && <WindowsDisplaySettings section="taskbar" />}
             <section>
@@ -3066,14 +3105,60 @@ function App() {
               <p className="text-sm text-gray-600 dark:text-gray-300">
                 {t("forceClose.body", { count: processInfo?.count ?? 0 })}
               </p>
+              {codexCloseBehavior === "ask" ? (
+                <div className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/70">
+                  <label className="flex cursor-pointer items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
+                    <input
+                      type="radio"
+                      name="codex-close-method"
+                      checked={!forceCloseSelected}
+                      onChange={() => setForceCloseSelected(false)}
+                      disabled={isForceClosingCodex || switchingId !== null}
+                      className="mt-0.5 accent-amber-600"
+                    />
+                    <span>
+                      <span className="block font-medium">{t("forceClose.graceful")}</span>
+                      <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                        {t("forceClose.gracefulDescription")}
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex cursor-pointer items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
+                    <input
+                      type="radio"
+                      name="codex-close-method"
+                      checked={forceCloseSelected}
+                      onChange={() => setForceCloseSelected(true)}
+                      disabled={isForceClosingCodex || switchingId !== null}
+                      className="mt-0.5 accent-red-600"
+                    />
+                    <span>
+                      <span className="block font-medium">{t("forceClose.force")}</span>
+                      <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                        {t("forceClose.forceDescription")}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400">
+                  {t(
+                    codexCloseBehavior === "force"
+                      ? "forceClose.configuredForce"
+                      : "forceClose.configuredGraceful",
+                  )}
+                </p>
+              )}
               {pendingTraySwitchAccount && (
                 <p className="text-sm text-gray-600 dark:text-gray-300">
                   {t("forceClose.thenSwitch", { name: pendingTraySwitchAccount.name })}
                 </p>
               )}
-              <p className="text-sm text-red-600 dark:text-red-300">
-                {t("forceClose.warning")}
-              </p>
+              {forceCloseSelected && (
+                <p className="text-sm text-red-600 dark:text-red-300">
+                  {t("forceClose.warning")}
+                </p>
+              )}
             </div>
             <div className="flex justify-end gap-3 p-5 border-t border-gray-100 dark:border-gray-800">
               <button
@@ -3091,11 +3176,15 @@ function App() {
                   void handleForceCloseConfirm();
                 }}
                 disabled={isForceClosingCodex || switchingId !== null}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50"
+                className={`px-4 py-2.5 text-sm font-medium rounded-lg text-white transition-colors disabled:opacity-50 ${
+                  forceCloseSelected
+                    ? "bg-red-600 hover:bg-red-700"
+                    : "bg-amber-600 hover:bg-amber-700"
+                }`}
               >
                 {isForceClosingCodex
-                  ? t("forceClose.closing")
-                  : forceCloseConfirmLabel}
+                  ? t(forceCloseSelected ? "forceClose.forceClosing" : "forceClose.closing")
+                  : closeConfirmLabel}
               </button>
             </div>
           </div>
