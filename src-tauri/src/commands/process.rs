@@ -1,5 +1,9 @@
 //! Process detection commands
 
+#[path = "desktop_reopen.rs"]
+mod desktop_reopen;
+pub use desktop_reopen::{get_codex_reopen_info, reopen_closed_codex_desktop};
+
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -96,6 +100,8 @@ pub struct KillCodexProcessesResult {
     pub killed_pids: Vec<u32>,
     /// Process IDs that could not be terminated.
     pub failed_pids: Vec<u32>,
+    /// One-use backend token for reopening desktop apps closed by this call.
+    pub reopen_token: Option<String>,
 }
 
 #[cfg(unix)]
@@ -203,16 +209,29 @@ pub(crate) fn is_codex_running_switch_block(error: &str) -> bool {
 #[tauri::command]
 pub async fn kill_codex_processes(
     force_close: Option<bool>,
+    reopen_desktop: Option<bool>,
 ) -> Result<KillCodexProcessesResult, String> {
     tokio::task::spawn_blocking(move || {
-        close_codex_processes_blocking(force_close.unwrap_or(false))
+        close_codex_processes_blocking(
+            force_close.unwrap_or(false),
+            reopen_desktop.unwrap_or(false),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn close_codex_processes_blocking(force_close: bool) -> Result<KillCodexProcessesResult, String> {
+fn close_codex_processes_blocking(
+    force_close: bool,
+    reopen_desktop: bool,
+) -> Result<KillCodexProcessesResult, String> {
     let (pids, _) = find_codex_processes().map_err(|e| e.to_string())?;
+    // Detection failure must never prevent the existing close-only path.
+    let desktops = if reopen_desktop {
+        desktop_reopen::capture_desktops(&pids).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let targeted_count = pids.len();
     let mut killed_pids = Vec::new();
     let mut failed_pids = Vec::new();
@@ -314,10 +333,12 @@ fn close_codex_processes_blocking(force_close: bool) -> Result<KillCodexProcesse
             .collect();
     }
 
+    let reopen_token = desktop_reopen::remember_closed_desktops(desktops, &killed_pids);
     Ok(KillCodexProcessesResult {
         targeted_count,
         killed_pids,
         failed_pids,
+        reopen_token,
     })
 }
 

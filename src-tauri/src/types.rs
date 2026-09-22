@@ -254,6 +254,15 @@ pub enum CodexCloseBehavior {
     Force,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexReopenBehavior {
+    #[default]
+    Ask,
+    Always,
+    Never,
+}
+
 fn default_close_behavior_prompt_enabled() -> bool {
     true
 }
@@ -271,6 +280,7 @@ pub struct AppSettings {
     #[serde(default = "default_close_behavior_prompt_enabled")]
     pub close_behavior_prompt_enabled: bool,
     pub codex_close_behavior: CodexCloseBehavior,
+    pub codex_reopen_behavior: CodexReopenBehavior,
     #[serde(default = "default_show_dual_clock")]
     pub show_dual_clock: bool,
     pub taskbar: TaskbarSettings,
@@ -285,6 +295,7 @@ impl Default for AppSettings {
             language: AppLanguage::default(),
             close_behavior_prompt_enabled: true,
             codex_close_behavior: CodexCloseBehavior::default(),
+            codex_reopen_behavior: CodexReopenBehavior::default(),
             show_dual_clock: false,
             taskbar: TaskbarSettings::default(),
             floating: FloatingSettings::default(),
@@ -790,8 +801,8 @@ pub struct CreditStatusDetails {
 mod tests {
     use super::{
         parse_chatgpt_id_token_claims, AccountInfo, AppLanguage, AppSettings, CodexCloseBehavior,
-        DockDisplayMode, FloatingSettings, StoredAccount, TaskbarResetDisplay, TrayDisplayMode,
-        TASKBAR_MIN_WIDTH,
+        CodexReopenBehavior, DockDisplayMode, FloatingSettings, StoredAccount, TaskbarResetDisplay,
+        TrayDisplayMode, TASKBAR_MIN_WIDTH,
     };
     use base64::Engine;
     use chrono::{Duration, Utc};
@@ -893,6 +904,7 @@ mod tests {
         assert_eq!(settings.language, AppLanguage::default());
         assert!(settings.close_behavior_prompt_enabled);
         assert_eq!(settings.codex_close_behavior, CodexCloseBehavior::Ask);
+        assert_eq!(settings.codex_reopen_behavior, CodexReopenBehavior::Ask);
         assert!(!settings.show_dual_clock);
         assert!(settings.taskbar.enabled);
         assert_eq!(

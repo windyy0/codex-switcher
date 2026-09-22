@@ -23,6 +23,7 @@ import type {
   AccountWithUsage,
   AppSettings,
   CodexCloseBehavior,
+  CodexReopenBehavior,
   CodexProcessInfo,
   DockDisplayMode,
   UsageInfo,
@@ -35,6 +36,8 @@ import {
   invokeBackend,
 } from "./lib/platform";
 import { requestMainWindowClose } from "./lib/windowLifecycle";
+import { finishDesktopTransition } from "./lib/desktopReopen";
+import { withTimeout } from "./lib/async";
 import { getEffectivePlanType } from "./lib/accountPlan";
 import { accountHealthBlocksAccountActions } from "./lib/accountHealth";
 import {
@@ -100,6 +103,10 @@ interface TrayAccountSwitchOutcome {
 }
 interface CloseBehaviorRequestedPayload {
   requestId?: number;
+}
+interface CodexReopenInfo {
+  supported: boolean;
+  desktop_count: number;
 }
 type AccountStatusFilter =
   | "all"
@@ -368,6 +375,10 @@ function App() {
   const [isCompletingCloseBehavior, setIsCompletingCloseBehavior] = useState(false);
   const [codexCloseBehavior, setCodexCloseBehavior] = useState<CodexCloseBehavior>("ask");
   const [forceCloseSelected, setForceCloseSelected] = useState(false);
+  const [codexReopenBehavior, setCodexReopenBehavior] = useState<CodexReopenBehavior>("ask");
+  const [reopenCodexSelected, setReopenCodexSelected] = useState(false);
+  const [codexReopenInfo, setCodexReopenInfo] = useState<CodexReopenInfo | null>(null);
+  const [isCheckingCodexReopen, setIsCheckingCodexReopen] = useState(false);
   const accountsRef = useRef(accounts);
   const autoWarmupAccountIdsRef = useRef(autoWarmupAccountIds);
   const autoWarmupLedgerRef = useRef(autoWarmupLedger);
@@ -1025,13 +1036,17 @@ function App() {
 
     void invokeBackend<AppSettings>("get_app_settings")
       .then((settings) => {
-        if (!disposed) setCodexCloseBehavior(settings.codex_close_behavior);
+        if (!disposed) {
+          setCodexCloseBehavior(settings.codex_close_behavior);
+          setCodexReopenBehavior(settings.codex_reopen_behavior);
+        }
       })
       .catch((err) => console.error("Failed to load Codex close behavior:", err));
 
     void import("@tauri-apps/api/event")
       .then(({ listen }) => listen<AppSettings>("settings-changed", ({ payload }) => {
         setCodexCloseBehavior(payload.codex_close_behavior);
+        setCodexReopenBehavior(payload.codex_reopen_behavior);
       }))
       .then((fn) => {
         if (disposed) fn();
@@ -1049,6 +1064,34 @@ function App() {
     if (!forceCloseConfirmOpen) return;
     setForceCloseSelected(codexCloseBehavior === "force");
   }, [codexCloseBehavior, forceCloseConfirmOpen]);
+
+  useEffect(() => {
+    if (!forceCloseConfirmOpen || !isTauriRuntime()) return;
+    let disposed = false;
+    setReopenCodexSelected(codexReopenBehavior === "always");
+    setCodexReopenInfo(null);
+    setIsCheckingCodexReopen(true);
+    void withTimeout(
+      invokeBackend<CodexReopenInfo>("get_codex_reopen_info"),
+      10_000,
+      "Codex desktop inspection timed out",
+    )
+      .then((info) => {
+        if (!disposed) setCodexReopenInfo(info);
+      })
+      .catch((err) => {
+        if (!disposed) {
+          setCodexReopenInfo(null);
+          console.error("Failed to inspect Codex desktop reopen support:", err);
+        }
+      })
+      .finally(() => {
+        if (!disposed) setIsCheckingCodexReopen(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [codexReopenBehavior, forceCloseConfirmOpen]);
 
   const openBlockedTraySwitch = useCallback(
     (accountId: string) => {
@@ -1346,6 +1389,26 @@ function App() {
     [closeBehaviorDontAskAgain, formatWarmupError, showWarmupToast, t]
   );
 
+  const finishCodexReopen = useCallback(
+    async (token: string | null, requested: boolean) => {
+      if (!requested) return;
+      if (!token) {
+        showWarmupToast(t("forceClose.reopenCaptureFailed"), true);
+        return;
+      }
+      try {
+        await invokeBackend("reopen_closed_codex_desktop", { token });
+      } catch (err) {
+        console.error("Failed to reopen the captured Codex desktop:", err);
+        showWarmupToast(
+          t("forceClose.reopenFailed", { error: formatWarmupError(err) }),
+          true,
+        );
+      }
+    },
+    [formatWarmupError, showWarmupToast, t],
+  );
+
   const handleForceCloseConfirm = useCallback(async () => {
     if (forceCloseSwitchInProgressRef.current) return;
     forceCloseSwitchInProgressRef.current = true;
@@ -1365,11 +1428,18 @@ function App() {
     };
 
     try {
-      const latestProcessInfo = await forceCloseCodexProcesses(forceCloseSelected);
-      if (!latestProcessInfo) {
+      const shouldReopenDesktop = reopenCodexSelected
+        && codexReopenInfo?.supported === true
+        && codexReopenInfo.desktop_count > 0;
+      const closeOutcome = await forceCloseCodexProcesses(
+        forceCloseSelected,
+        shouldReopenDesktop,
+      );
+      if (!closeOutcome) {
         clearPendingUnlessReplaced(initialPendingTraySwitchAccountId);
         return;
       }
+      const latestProcessInfo = closeOutcome.processInfo;
       if (!latestProcessInfo.can_switch) {
         // The force-close hook closes the confirmation while it reports its
         // result. Keep a tray-triggered confirmation available when some
@@ -1380,52 +1450,61 @@ function App() {
         return;
       }
 
-      while (true) {
-        const accountId = pendingTraySwitchAccountIdRef.current;
-        if (!accountId) return;
+      await finishDesktopTransition(
+        {
+          canSwitch: latestProcessInfo.can_switch,
+          reopenToken: closeOutcome.reopenToken,
+        },
+        async () => {
+          while (true) {
+            const accountId = pendingTraySwitchAccountIdRef.current;
+            if (!accountId) return true;
 
-        inFlightTraySwitchAccountId = accountId;
-        setSwitchingId(accountId);
-        let switched = false;
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const outcome = await invokeBackend<TrayAccountSwitchOutcome>(
-            "switch_account_from_tray",
-            { accountId }
-          );
-          if (outcome.status === "switched") {
-            switched = true;
-            break;
+            inFlightTraySwitchAccountId = accountId;
+            setSwitchingId(accountId);
+            let switched = false;
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              const outcome = await invokeBackend<TrayAccountSwitchOutcome>(
+                "switch_account_from_tray",
+                { accountId }
+              );
+              if (outcome.status === "switched") {
+                switched = true;
+                break;
+              }
+
+              const blockedProcessInfo = await checkProcesses();
+              if (!blockedProcessInfo) {
+                clearPendingUnlessReplaced(accountId);
+                showWarmupToast(t("warmup.processCheckFailed"), true);
+                return false;
+              }
+              if (blockedProcessInfo.can_switch && attempt === 0) continue;
+              if (!blockedProcessInfo.can_switch) {
+                setForceCloseConfirmOpen(true);
+                return false;
+              }
+
+              if (pendingTraySwitchAccountIdRef.current !== accountId) break;
+              clearPendingUnlessReplaced(accountId);
+              showWarmupToast(t("warmup.switchBlocked"), true);
+              return false;
+            }
+            if (!switched) continue;
+
+            // A newer tray choice made while the close/switch transaction was
+            // in flight wins. Apply it before reporting completion or reopening.
+            if (pendingTraySwitchAccountIdRef.current !== accountId) continue;
+            updatePendingTraySwitch(null);
+            void loadAccounts(true).catch((err) => {
+              console.error("Account switched after closing Codex but the list could not be reloaded:", err);
+            });
+            showWarmupToast(t("warmup.switchedAfterClose"));
+            return true;
           }
-
-          const blockedProcessInfo = await checkProcesses();
-          if (!blockedProcessInfo) {
-            clearPendingUnlessReplaced(accountId);
-            showWarmupToast(t("warmup.processCheckFailed"), true);
-            return;
-          }
-          if (blockedProcessInfo.can_switch && attempt === 0) continue;
-          if (!blockedProcessInfo.can_switch) {
-            setForceCloseConfirmOpen(true);
-            return;
-          }
-
-          if (pendingTraySwitchAccountIdRef.current !== accountId) break;
-          clearPendingUnlessReplaced(accountId);
-          showWarmupToast(t("warmup.switchBlocked"), true);
-          return;
-        }
-        if (!switched) continue;
-
-        // A newer tray choice made while the close/switch transaction was in
-        // flight wins. Apply it before reporting the operation as complete.
-        if (pendingTraySwitchAccountIdRef.current !== accountId) continue;
-        updatePendingTraySwitch(null);
-        void loadAccounts(true).catch((err) => {
-          console.error("Account switched after closing Codex but the list could not be reloaded:", err);
-        });
-        showWarmupToast(t("warmup.switchedAfterClose"));
-        return;
-      }
+        },
+        (token) => finishCodexReopen(token, shouldReopenDesktop),
+      );
     } catch (err) {
       console.error("Failed to switch account after closing Codex:", err);
       clearPendingUnlessReplaced(inFlightTraySwitchAccountId);
@@ -1439,10 +1518,13 @@ function App() {
     }
   }, [
     checkProcesses,
+    codexReopenInfo,
+    finishCodexReopen,
     forceCloseCodexProcesses,
     forceCloseSelected,
     formatWarmupError,
     loadAccounts,
+    reopenCodexSelected,
     setForceCloseConfirmOpen,
     showWarmupToast,
     t,
@@ -3095,13 +3177,13 @@ function App() {
 
       {forceCloseConfirmOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl w-full max-w-md mx-4 shadow-xl">
+          <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl mx-4 dark:border-gray-700 dark:bg-gray-900">
             <div className="p-5 border-b border-gray-100 dark:border-gray-800">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 {t("forceClose.title")}
               </h2>
             </div>
-            <div className="p-5 space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
               <p className="text-sm text-gray-600 dark:text-gray-300">
                 {t("forceClose.body", { count: processInfo?.count ?? 0 })}
               </p>
@@ -3149,6 +3231,41 @@ function App() {
                   )}
                 </p>
               )}
+              {isCheckingCodexReopen ? (
+                <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400">
+                  {t("forceClose.reopenChecking")}
+                </p>
+              ) : codexReopenInfo?.supported && codexReopenInfo.desktop_count > 0 ? (
+                codexReopenBehavior === "ask" ? (
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={reopenCodexSelected}
+                      onChange={(event) => setReopenCodexSelected(event.target.checked)}
+                      disabled={isForceClosingCodex || switchingId !== null}
+                      className="mt-0.5 h-4 w-4 accent-emerald-600"
+                    />
+                    <span>
+                      <span className="block font-medium">{t("forceClose.reopen")}</span>
+                      <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                        {t("forceClose.reopenDescription")}
+                      </span>
+                    </span>
+                  </label>
+                ) : (
+                  <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400">
+                    {t(
+                      codexReopenBehavior === "always"
+                        ? "forceClose.configuredReopen"
+                        : "forceClose.configuredKeepClosed",
+                    )}
+                  </p>
+                )
+              ) : (
+                <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400">
+                  {t("forceClose.reopenUnavailable")}
+                </p>
+              )}
               {pendingTraySwitchAccount && (
                 <p className="text-sm text-gray-600 dark:text-gray-300">
                   {t("forceClose.thenSwitch", { name: pendingTraySwitchAccount.name })}
@@ -3166,7 +3283,7 @@ function App() {
                   updatePendingTraySwitch(null);
                   setForceCloseConfirmOpen(false);
                 }}
-                disabled={isForceClosingCodex || switchingId !== null}
+                disabled={isForceClosingCodex || switchingId !== null || isCheckingCodexReopen}
                 className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-colors disabled:opacity-50"
               >
                 {t("common.cancel")}
@@ -3175,7 +3292,7 @@ function App() {
                 onClick={() => {
                   void handleForceCloseConfirm();
                 }}
-                disabled={isForceClosingCodex || switchingId !== null}
+                disabled={isForceClosingCodex || switchingId !== null || isCheckingCodexReopen}
                 className={`px-4 py-2.5 text-sm font-medium rounded-lg text-white transition-colors disabled:opacity-50 ${
                   forceCloseSelected
                     ? "bg-red-600 hover:bg-red-700"

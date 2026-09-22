@@ -14,12 +14,12 @@ use crate::commands::{
     add_account_from_auth_json_text, add_account_from_file, add_api_account, cancel_login,
     check_codex_processes, complete_login, delete_account, export_accounts_full_encrypted_bytes,
     export_accounts_slim_text, fetch_usage_cached, get_account_usage_stats,
-    get_active_account_info, get_api_account_config, get_app_language, get_masked_account_ids,
-    import_accounts_full_encrypted_bytes, import_accounts_slim_text, kill_codex_processes,
-    list_accounts, refresh_account_metadata, refresh_all_accounts_usage, rename_account,
-    report_account_deactivation_email, report_oauth_page_error, set_account_disabled,
-    set_api_account_config, set_masked_account_ids, start_login, switch_account, warmup_account,
-    warmup_all_accounts,
+    get_active_account_info, get_api_account_config, get_app_language, get_codex_reopen_info,
+    get_masked_account_ids, import_accounts_full_encrypted_bytes, import_accounts_slim_text,
+    kill_codex_processes, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
+    rename_account, reopen_closed_codex_desktop, report_account_deactivation_email,
+    report_oauth_page_error, set_account_disabled, set_api_account_config, set_masked_account_ids,
+    start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 use crate::types::AppLanguage;
 
@@ -109,6 +109,13 @@ struct MaskedIdsArgs {
 struct CloseCodexArgs {
     #[serde(default, alias = "force_close")]
     force_close: Option<bool>,
+    #[serde(default, alias = "reopen_desktop")]
+    reopen_desktop: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReopenCodexArgs {
+    token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -331,9 +338,14 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(crate::commands::settings::save_language(args.language)?)
         }
         "check_codex_processes" => to_json(check_codex_processes().await?),
+        "get_codex_reopen_info" => to_json(get_codex_reopen_info().await?),
         "kill_codex_processes" => {
             let args: CloseCodexArgs = parse_args(payload)?;
-            to_json(kill_codex_processes(args.force_close).await?)
+            to_json(kill_codex_processes(args.force_close, args.reopen_desktop).await?)
+        }
+        "reopen_closed_codex_desktop" => {
+            let args: ReopenCodexArgs = parse_args(payload)?;
+            to_json(reopen_closed_codex_desktop(args.token).await?)
         }
         _ => Err(format!("Unsupported web command: {command}")),
     }

@@ -7,6 +7,12 @@ interface KillCodexProcessesResult {
   targeted_count: number;
   killed_pids: number[];
   failed_pids: number[];
+  reopen_token: string | null;
+}
+
+export interface CloseCodexProcessesOutcome {
+  processInfo: CodexProcessInfo;
+  reopenToken: string | null;
 }
 
 interface UseForceCloseCodexProcessesOptions {
@@ -23,13 +29,16 @@ export function useForceCloseCodexProcesses({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isForceClosing, setIsForceClosing] = useState(false);
 
-  const forceCloseCodexProcesses = useCallback(async (forceClose: boolean) => {
+  const forceCloseCodexProcesses = useCallback(async (
+    forceClose: boolean,
+    reopenDesktop: boolean,
+  ): Promise<CloseCodexProcessesOutcome | null> => {
     try {
       setIsForceClosing(true);
 
       const result = await invokeBackend<KillCodexProcessesResult>(
         "kill_codex_processes",
-        { forceClose },
+        { forceClose, reopenDesktop },
       );
       const latestProcessInfo = await checkProcesses();
       if (!latestProcessInfo) {
@@ -65,7 +74,10 @@ export function useForceCloseCodexProcesses({
         );
       }
 
-      return latestProcessInfo;
+      return {
+        processInfo: latestProcessInfo,
+        reopenToken: result.reopen_token,
+      };
     } catch (err) {
       console.error("Failed to close Codex processes:", err);
       showToast(i18n.t("forceClose.failed", { error: formatError(err) }), true);

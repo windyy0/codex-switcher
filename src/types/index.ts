@@ -3,6 +3,7 @@
 export type AuthMode = "api_key" | "chat_g_p_t";
 export type DockDisplayMode = "show_in_dock" | "menu_bar_only";
 export type CodexCloseBehavior = "ask" | "graceful" | "force";
+export type CodexReopenBehavior = "ask" | "always" | "never";
 export type TaskbarLayout = "detailed" | "minimal" | "compact";
 export type TaskbarDoubleClickAction = "toggle_floating" | "open_main";
 export type TaskbarResetDisplay = "countdown" | "exact_time";
@@ -41,6 +42,7 @@ export interface AppSettings {
   language: string;
   close_behavior_prompt_enabled: boolean;
   codex_close_behavior: CodexCloseBehavior;
+  codex_reopen_behavior: CodexReopenBehavior;
   show_dual_clock: boolean;
   taskbar: {
     enabled: boolean;
