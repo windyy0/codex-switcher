@@ -6,6 +6,18 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+### Added
+
+- Account switching can gracefully close Codex, optionally force-close it, and reopen the desktop windows closed for the switch.
+- ChatGPT subscription metadata is refreshed periodically in the background so expiration details do not remain stale indefinitely.
+
+### Fixed
+
+- In API mode, the Windows taskbar widget shows only “API mode” and the current account instead of inapplicable quota and reset details. Its weekly-exhaustion reset display now uses the same threshold as automatic warm-up.
+- Updated the automatic warm-up model to GPT-6 Luna.
+- Fixed clipping of the Codex close-behavior dropdown and removed redundant subscription-metadata text from the account list.
+- Removed sensitive response details from usage and warm-up logs; missing metadata fields no longer overwrite existing account information.
+
 ## [0.108.3] - 2026-09-17
 
 ### Added
