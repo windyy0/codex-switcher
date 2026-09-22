@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.109.0] - 2026-09-23
+
 ### Added
 
 - Account switching can gracefully close Codex, optionally force-close it, and reopen the desktop windows closed for the switch.
