@@ -77,3 +77,8 @@ windows = { version = "0.58", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 winreg = "0.55"
+
+[patch.crates-io]
+# Temporary backport of tray-icon PR #365: macOS 27 can swallow left-clicks while an NSMenu stays attached.
+# Remove this entry and vendor/tray-icon-0.21.3 once Tauri resolves to tray-icon >= 0.25.1 (or another release containing that fix), then refresh Cargo.lock.
+tray-icon = { path = "vendor/tray-icon-0.21.3" }

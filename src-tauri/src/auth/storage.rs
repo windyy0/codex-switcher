@@ -488,24 +488,40 @@ pub fn update_account_metadata(
         .find(|a| a.id == account_id)
         .context("Account not found")?;
 
+    let mut changed = false;
+
     if let Some(new_name) = name {
-        account.name = new_name;
+        if account.name != new_name {
+            account.name = new_name;
+            changed = true;
+        }
     }
 
-    if email.is_some() {
-        account.email = email;
+    if let Some(new_email) = email {
+        if account.email.as_ref() != Some(&new_email) {
+            account.email = Some(new_email);
+            changed = true;
+        }
     }
 
-    if plan_type.is_some() {
-        account.plan_type = plan_type;
+    if let Some(new_plan_type) = plan_type {
+        if account.plan_type.as_ref() != Some(&new_plan_type) {
+            account.plan_type = Some(new_plan_type);
+            changed = true;
+        }
     }
 
     if let Some(subscription_expires_at) = subscription_expires_at {
-        account.subscription_expires_at = subscription_expires_at;
+        if account.subscription_expires_at != subscription_expires_at {
+            account.subscription_expires_at = subscription_expires_at;
+            changed = true;
+        }
     }
 
     let updated = account.clone();
-    save_accounts(&store)?;
+    if changed {
+        save_accounts(&store)?;
+    }
     Ok(updated)
 }
 
@@ -581,9 +597,11 @@ pub fn set_masked_account_ids(ids: Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        has_consumed_refresh_token, has_duplicate_chatgpt_credentials,
-        remember_consumed_refresh_token, write_file_atomic, MAX_CONSUMED_REFRESH_TOKEN_HASHES,
+        get_accounts_file, has_consumed_refresh_token, has_duplicate_chatgpt_credentials,
+        remember_consumed_refresh_token, update_account_metadata, write_file_atomic,
+        MAX_CONSUMED_REFRESH_TOKEN_HASHES,
     };
+    use crate::auth::test_support::{account, seed_accounts, AuthTestEnv};
     use crate::types::{AccountsStore, StoredAccount};
     use std::fs;
 
@@ -697,5 +715,42 @@ mod tests {
         remember_consumed_refresh_token(&mut store, "old-refresh");
 
         assert!(has_duplicate_chatgpt_credentials(&store, &candidate));
+    }
+
+    #[test]
+    fn unchanged_account_metadata_does_not_rewrite_the_store() {
+        let _env = AuthTestEnv::new();
+        let mut stored = account("unchanged");
+        stored.plan_type = Some("plus".into());
+        stored.subscription_expires_at = Some(
+            chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        seed_accounts(vec![stored.clone()], Some(&stored.id));
+
+        let path = get_accounts_file().unwrap();
+        let original = fs::read_to_string(&path).unwrap();
+        let deliberately_noncanonical = format!("\n{original}\n");
+        fs::write(&path, &deliberately_noncanonical).unwrap();
+
+        let updated = update_account_metadata(
+            &stored.id,
+            Some(stored.name.clone()),
+            stored.email.clone(),
+            stored.plan_type.clone(),
+            Some(stored.subscription_expires_at),
+        )
+        .unwrap();
+
+        assert_eq!(updated.id, stored.id);
+        assert_eq!(updated.name, stored.name);
+        assert_eq!(updated.email, stored.email);
+        assert_eq!(updated.plan_type, stored.plan_type);
+        assert_eq!(
+            updated.subscription_expires_at,
+            stored.subscription_expires_at
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), deliberately_noncanonical);
     }
 }
