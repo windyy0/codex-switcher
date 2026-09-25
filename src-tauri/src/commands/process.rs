@@ -36,7 +36,16 @@ use windows::{
                 PROCESS_QUERY_LIMITED_INFORMATION,
             },
         },
-        UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible},
+        UI::{
+            Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+                VK_CONTROL, VK_Q,
+            },
+            WindowsAndMessaging::{
+                EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId,
+                IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+            },
+        },
     },
 };
 
@@ -434,13 +443,103 @@ fn unix_close_signal(force: bool) -> &'static str {
 }
 
 #[cfg(any(windows, test))]
-fn windows_taskkill_args(pid: u32, force: bool) -> Vec<String> {
-    let mut args = Vec::with_capacity(4);
-    if force {
-        args.push("/F".to_string());
+fn windows_force_taskkill_args(pid: u32) -> Vec<String> {
+    vec![
+        "/F".to_string(),
+        "/T".to_string(),
+        "/PID".to_string(),
+        pid.to_string(),
+    ]
+}
+
+#[cfg(windows)]
+struct WindowsQuitWindow {
+    pid: u32,
+    visible: Option<HWND>,
+    hidden: Option<HWND>,
+}
+
+#[cfg(windows)]
+fn windows_key_input(key: VIRTUAL_KEY, released: bool) -> INPUT {
+    let mut input = INPUT::default();
+    input.r#type = INPUT_KEYBOARD;
+    input.Anonymous.ki = KEYBDINPUT {
+        wVk: key,
+        dwFlags: if released {
+            KEYEVENTF_KEYUP
+        } else {
+            Default::default()
+        },
+        ..Default::default()
+    };
+    input
+}
+
+#[cfg(windows)]
+fn request_windows_app_quit(pid: u32) -> bool {
+    let mut window = WindowsQuitWindow {
+        pid,
+        visible: None,
+        hidden: None,
+    };
+    let _ = unsafe {
+        EnumWindows(
+            Some(find_windows_quit_window),
+            LPARAM((&mut window as *mut WindowsQuitWindow) as isize),
+        )
+    };
+    let Some(hwnd) = window.visible.or(window.hidden) else {
+        return false;
+    };
+
+    // WM_CLOSE only hides Codex in the tray. Its Windows app menu binds
+    // Ctrl+Q to the Quit role, which runs the app's cleanup and confirmation.
+    let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
+    let _ = unsafe { SetForegroundWindow(hwnd) };
+    for _ in 0..5 {
+        if unsafe { GetForegroundWindow() } == hwnd {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
-    args.extend(["/T".to_string(), "/PID".to_string(), pid.to_string()]);
-    args
+    if unsafe { GetForegroundWindow() } != hwnd {
+        return false;
+    }
+
+    let inputs = [
+        windows_key_input(VK_CONTROL, false),
+        windows_key_input(VK_Q, false),
+        windows_key_input(VK_Q, true),
+        windows_key_input(VK_CONTROL, true),
+    ];
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        let release = [windows_key_input(VK_CONTROL, true)];
+        unsafe { SendInput(&release, std::mem::size_of::<INPUT>() as i32) };
+        return false;
+    }
+    true
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn find_windows_quit_window(hwnd: HWND, state: LPARAM) -> BOOL {
+    let window = unsafe { &mut *(state.0 as *mut WindowsQuitWindow) };
+    let mut window_pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut window_pid)) };
+    if window_pid != window.pid {
+        return true.into();
+    }
+    let mut class = [0u16; 64];
+    let length = unsafe { GetClassNameW(hwnd, &mut class) };
+    if !String::from_utf16_lossy(&class[..length as usize]).starts_with("Chrome_WidgetWin_") {
+        return true.into();
+    }
+    if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        window.visible = Some(hwnd);
+        return false.into();
+    }
+    window.hidden.get_or_insert(hwnd);
+    true.into()
 }
 
 fn close_process(pid: u32, force: bool) -> bool {
@@ -457,9 +556,12 @@ fn close_process(pid: u32, force: bool) -> bool {
 
     #[cfg(windows)]
     {
+        if !force {
+            return request_windows_app_quit(pid) || !process_exists(pid);
+        }
         let killed = Command::new("taskkill")
             .creation_flags(CREATE_NO_WINDOW)
-            .args(windows_taskkill_args(pid, force))
+            .args(windows_force_taskkill_args(pid))
             .status()
             .map(|status| status.success())
             .unwrap_or(false);
@@ -1151,16 +1253,15 @@ mod tests {
         classify_windows_codex_processes, is_recent_windows_process_start,
         is_supported_local_app_data_codex_path, is_supported_program_files_codex_path,
         is_windows_codex_candidate, is_windows_codex_root_process, normalize_windows_path,
-        unix_close_signal, utf16_c_string, windows_path_relative_to_root, windows_taskkill_args,
-        WindowsProcessEntry,
+        unix_close_signal, utf16_c_string, windows_force_taskkill_args,
+        windows_path_relative_to_root, WindowsProcessEntry,
     };
 
     #[test]
     fn close_commands_default_to_graceful_signals() {
         assert_eq!(unix_close_signal(false), "-TERM");
         assert_eq!(unix_close_signal(true), "-9");
-        assert_eq!(windows_taskkill_args(42, false), ["/T", "/PID", "42"]);
-        assert_eq!(windows_taskkill_args(42, true), ["/F", "/T", "/PID", "42"]);
+        assert_eq!(windows_force_taskkill_args(42), ["/F", "/T", "/PID", "42"]);
     }
 
     fn windows_process(
