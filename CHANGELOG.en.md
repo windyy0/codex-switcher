@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.110.0] - 2026-09-25
+
 ### Fixed
 
 - Fixed normal close hiding only the session window while leaving the Codex tray process running on Windows; it now invokes Codex's application-level quit flow.
