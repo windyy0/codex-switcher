@@ -25,6 +25,7 @@ use crate::types::{
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
 const CHATGPT_ACCOUNTS_CHECK_API: &str =
     "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
+const CHATGPT_SUBSCRIPTIONS_API: &str = "https://chatgpt.com/backend-api/subscriptions";
 const CHATGPT_CODEX_RESPONSES_API: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CHATGPT_ORIGIN: &str = "https://chatgpt.com";
 /// A browser-like User-Agent to avoid Cloudflare bot detection.
@@ -58,12 +59,22 @@ struct AccountsCheckEntry {
 struct AccountsCheckAccount {
     #[serde(default)]
     plan_type: Option<String>,
+    #[serde(default, alias = "accountId")]
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AccountsCheckEntitlement {
     #[serde(default)]
     expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatGptSubscriptionResponse {
+    #[serde(default, alias = "planType")]
+    plan_type: Option<String>,
+    #[serde(default, alias = "activeUntil")]
+    active_until: Option<DateTime<Utc>>,
 }
 
 /// Get usage information for an account
@@ -133,13 +144,36 @@ pub async fn fetch_chatgpt_account_metadata(
         .await
         .context("Failed to parse accounts check response")?;
 
-    let selected_entry = chatgpt_account_id
-        .and_then(|account_id| payload.accounts.get(account_id))
-        .or_else(|| payload.accounts.get("default"))
-        .or_else(|| payload.accounts.values().next())
-        .context("Accounts check response did not include an account entry")?;
+    let selected_key = chatgpt_account_id
+        .and_then(|account_id| {
+            payload
+                .accounts
+                .contains_key(account_id)
+                .then_some(account_id)
+        })
+        .or_else(|| {
+            payload
+                .accounts
+                .contains_key("default")
+                .then_some("default")
+        });
+    let (selected_key, selected_entry) = match selected_key {
+        Some(key) => (
+            key,
+            payload
+                .accounts
+                .get(key)
+                .expect("selected accounts/check key should exist"),
+        ),
+        None => payload
+            .accounts
+            .iter()
+            .next()
+            .map(|(key, entry)| (key.as_str(), entry))
+            .context("Accounts check response did not include an account entry")?,
+    };
 
-    Ok(ChatGptAccountMetadata {
+    let accounts_check_metadata = ChatGptAccountMetadata {
         plan_type: selected_entry
             .account
             .as_ref()
@@ -148,7 +182,112 @@ pub async fn fetch_chatgpt_account_metadata(
             .entitlement
             .as_ref()
             .and_then(|entitlement| entitlement.expires_at),
+    };
+
+    // `accounts/check` can resolve the default Personal workspace instead of
+    // the personal ChatGPT account represented by chatgpt_account_id. Compare
+    // the returned account identity before trusting its entitlement expiry.
+    // Map keys such as `default` are aliases and cannot prove ownership.
+    let selected_account_id = selected_entry
+        .account
+        .as_ref()
+        .and_then(|account| account.account_id.as_deref())
+        .or_else(|| (selected_key != "default").then_some(selected_key));
+    let personal_subscription_mismatch =
+        needs_personal_subscription_lookup(chatgpt_account_id, selected_account_id);
+
+    if !personal_subscription_mismatch {
+        return Ok(accounts_check_metadata);
+    }
+
+    // The subscriptions endpoint is keyed by the personal account ID and is
+    // the authoritative source for active_until when accounts/check resolved
+    // a different workspace. If it fails, leave the expiry empty instead of
+    // showing a date that belongs to another account.
+    let Some(chatgpt_account_id) = chatgpt_account_id else {
+        return Ok(accounts_check_metadata);
+    };
+
+    match fetch_chatgpt_subscription(access_token, chatgpt_account_id).await {
+        Ok(subscription) => Ok(prefer_personal_subscription(
+            accounts_check_metadata,
+            subscription,
+        )),
+        Err(error) => {
+            // Team/workspace accounts and older OAuth tokens may not have
+            // access to this browser-only endpoint. Do not keep an expiry from
+            // the mismatched workspace in that case.
+            eprintln!("[Account] Personal subscription lookup failed: {error}");
+            Ok(ChatGptAccountMetadata {
+                plan_type: accounts_check_metadata.plan_type,
+                subscription_expires_at: None,
+            })
+        }
+    }
+}
+
+async fn fetch_chatgpt_subscription(
+    access_token: &str,
+    chatgpt_account_id: &str,
+) -> Result<ChatGptAccountMetadata> {
+    let client = chatgpt_client()?;
+    let mut headers = build_chatgpt_headers(access_token, Some(chatgpt_account_id))?;
+    // These target headers are sent by ChatGPT's browser client and are
+    // required by some OAuth gateway deployments for the subscriptions route.
+    headers.insert(
+        HeaderName::from_static("x-openai-target-path"),
+        HeaderValue::from_static("/backend-api/subscriptions"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-openai-target-route"),
+        HeaderValue::from_static("/backend-api/subscriptions"),
+    );
+    let response = client
+        .get(CHATGPT_SUBSCRIPTIONS_API)
+        .headers(headers)
+        .query(&[("account_id", chatgpt_account_id)])
+        .send()
+        .await
+        .context("Failed to send personal subscription request")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Subscriptions API error: {status} - {body}");
+    }
+
+    let subscription: ChatGptSubscriptionResponse = response
+        .json()
+        .await
+        .context("Failed to parse subscriptions response")?;
+
+    Ok(ChatGptAccountMetadata {
+        plan_type: subscription.plan_type,
+        subscription_expires_at: subscription.active_until,
     })
+}
+
+fn prefer_personal_subscription(
+    accounts_check: ChatGptAccountMetadata,
+    personal_subscription: ChatGptAccountMetadata,
+) -> ChatGptAccountMetadata {
+    ChatGptAccountMetadata {
+        plan_type: personal_subscription.plan_type.or(accounts_check.plan_type),
+        // A successful personal subscription response is authoritative even
+        // when active_until is null (for example, a free account). The
+        // workspace entitlement must never be paired with the personal plan.
+        subscription_expires_at: personal_subscription.subscription_expires_at,
+    }
+}
+
+fn needs_personal_subscription_lookup(
+    personal_account_id: Option<&str>,
+    selected_account_id: Option<&str>,
+) -> bool {
+    match (personal_account_id, selected_account_id) {
+        (Some(personal), Some(selected)) => !personal.eq_ignore_ascii_case(selected),
+        _ => false,
+    }
 }
 
 async fn get_usage_with_chatgpt_auth(account: &StoredAccount) -> Result<UsageInfo> {
@@ -662,6 +801,83 @@ mod tests {
 
         assert_eq!(primary.map(|window| window.used_percent), Some(11.0));
         assert_eq!(secondary.map(|window| window.used_percent), Some(22.0));
+    }
+
+    #[test]
+    fn personal_subscription_expiry_overrides_workspace_entitlement() {
+        let workspace_expiry = DateTime::parse_from_rfc3339("2026-09-27T07:09:59Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let personal_expiry = DateTime::parse_from_rfc3339("2026-09-27T01:09:59Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let metadata = prefer_personal_subscription(
+            ChatGptAccountMetadata {
+                plan_type: Some("plus".into()),
+                subscription_expires_at: Some(workspace_expiry),
+            },
+            ChatGptAccountMetadata {
+                plan_type: Some("plus".into()),
+                subscription_expires_at: Some(personal_expiry),
+            },
+        );
+
+        assert_eq!(metadata.subscription_expires_at, Some(personal_expiry));
+    }
+
+    #[test]
+    fn personal_subscription_response_accepts_active_until() {
+        let response: ChatGptSubscriptionResponse =
+            serde_json::from_str(r#"{"plan_type":"plus","active_until":"2026-09-27T01:09:59Z"}"#)
+                .unwrap();
+
+        assert_eq!(response.plan_type.as_deref(), Some("plus"));
+        assert_eq!(
+            response.active_until,
+            Some(
+                DateTime::parse_from_rfc3339("2026-09-27T01:09:59Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+    }
+
+    #[test]
+    fn personal_subscription_without_expiry_does_not_reuse_workspace_expiry() {
+        let workspace_expiry = DateTime::parse_from_rfc3339("2026-09-27T07:09:59Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let metadata = prefer_personal_subscription(
+            ChatGptAccountMetadata {
+                plan_type: Some("plus".into()),
+                subscription_expires_at: Some(workspace_expiry),
+            },
+            ChatGptAccountMetadata {
+                plan_type: None,
+                subscription_expires_at: None,
+            },
+        );
+
+        assert_eq!(metadata.subscription_expires_at, None);
+        assert_eq!(metadata.plan_type.as_deref(), Some("plus"));
+    }
+
+    #[test]
+    fn personal_subscription_lookup_is_only_for_a_different_account() {
+        assert!(needs_personal_subscription_lookup(
+            Some("personal-account"),
+            Some("workspace-account")
+        ));
+        assert!(!needs_personal_subscription_lookup(
+            Some("PERSONAL-ACCOUNT"),
+            Some("personal-account")
+        ));
+        assert!(!needs_personal_subscription_lookup(
+            Some("personal-account"),
+            None
+        ));
     }
 
     #[test]
