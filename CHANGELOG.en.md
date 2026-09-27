@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.110.1] - 2026-09-27
+
 ### Fixed
 
 - Fixed some OAuth accounts using the default Personal workspace's expiry instead of the personal subscription expiry; personal subscription metadata is now preferred when the account identities differ.
