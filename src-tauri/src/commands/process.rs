@@ -64,7 +64,11 @@ struct WindowsProcessEntry {
     parent_process_id: u32,
     executable_path: String,
     trusted_desktop_executable: bool,
-    has_visible_window: bool,
+    /// Whether the process owns any top-level window, including hidden tray
+    /// windows. Codex keeps its Electron window hidden when it is minimized
+    /// to the tray, but that window is still the target for the app-level
+    /// Ctrl+Q quit flow used by graceful close.
+    has_top_level_window: bool,
     started_recently: bool,
 }
 
@@ -927,7 +931,7 @@ fn read_windows_process_snapshot() -> anyhow::Result<Vec<WindowsProcessEntry>> {
             parent_process_id: entry.th32ParentProcessID,
             executable_path: details.executable_path,
             trusted_desktop_executable,
-            has_visible_window: window_processes.contains(&process_id),
+            has_top_level_window: window_processes.contains(&process_id),
             started_recently: details.started_recently,
         });
 
@@ -1007,6 +1011,9 @@ fn is_recent_windows_process_start(created_ticks: u64, now_ticks: u64) -> bool {
 
 #[cfg(windows)]
 fn read_windows_window_processes() -> anyhow::Result<HashSet<u32>> {
+    // Include hidden top-level windows. Codex hides its Electron window when
+    // it moves to the tray, and graceful close still needs that window handle
+    // to send the app-level quit shortcut.
     let mut process_ids = HashSet::new();
     unsafe {
         EnumWindows(
@@ -1020,10 +1027,6 @@ fn read_windows_window_processes() -> anyhow::Result<HashSet<u32>> {
 
 #[cfg(windows)]
 unsafe extern "system" fn collect_windows_window_process(hwnd: HWND, state: LPARAM) -> BOOL {
-    if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
-        return true.into();
-    }
-
     let mut process_id = 0;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
     if process_id != 0 {
@@ -1051,9 +1054,9 @@ fn classify_windows_codex_processes(processes: &[WindowsProcessEntry]) -> (Vec<u
         .iter()
         .filter(|process| is_windows_codex_root_process(process, processes))
     {
-        let has_window = process.has_visible_window
+        let has_window = process.has_top_level_window
             || windows_has_descendant_matching(process.process_id, processes, |child| {
-                child.has_visible_window
+                child.has_top_level_window
             });
         let has_app_server =
             windows_has_descendant_matching(process.process_id, processes, |child| {
@@ -1269,7 +1272,7 @@ mod tests {
         process_id: u32,
         parent_process_id: u32,
         executable_path: &str,
-        has_visible_window: bool,
+        has_top_level_window: bool,
     ) -> WindowsProcessEntry {
         let normalized_path = normalize_windows_path(executable_path);
         let trusted_desktop_executable = if name.eq_ignore_ascii_case("Codex.exe") {
@@ -1291,7 +1294,7 @@ mod tests {
             parent_process_id,
             executable_path: executable_path.to_string(),
             trusted_desktop_executable,
-            has_visible_window,
+            has_top_level_window,
             started_recently: false,
         }
     }
@@ -1601,6 +1604,25 @@ mod tests {
         assert_eq!(
             classify_windows_codex_processes(&processes),
             (vec![100, 200], 0)
+        );
+    }
+
+    #[test]
+    fn classifies_hidden_tray_desktop_root_as_active() {
+        // A hidden top-level window represents a desktop app minimized to the
+        // tray. It must remain an active close target even without a visible
+        // window title.
+        let hidden_root = windows_process(
+            "ChatGPT.exe",
+            250,
+            1,
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+            true,
+        );
+
+        assert_eq!(
+            classify_windows_codex_processes(&[hidden_root]),
+            (vec![250], 0)
         );
     }
 
