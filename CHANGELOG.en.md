@@ -6,6 +6,8 @@ The Chinese version is maintained in [CHANGELOG.md](./CHANGELOG.md); both files 
 
 ## [Unreleased]
 
+## [0.110.2] - 2026-10-01
+
 ### Fixed
 
 - Fixed Windows graceful close missing Codex after it moved to the tray with its desktop window hidden; hidden desktop windows are now detected and sent through the application-level quit flow.
